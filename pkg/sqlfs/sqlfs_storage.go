@@ -10,18 +10,31 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ncruces/go-sqlite3"
 )
 
 type storage struct {
 	files    map[string]*file
 	children map[string]map[string]*file
+	conn     *sqlite3.Conn
 }
 
-func newStorage() *storage {
+func newStorage(dbName string) (*storage, error) {
+	conn, err := sqlite3.Open(dbName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	if err := InitDatabase(conn); err != nil {
+		return nil, fmt.Errorf("failed to initialize database: %w", err)
+	}
+
 	return &storage{
 		files:    make(map[string]*file, 0),
 		children: make(map[string]map[string]*file, 0),
-	}
+		conn:     conn,
+	}, nil
 }
 
 func (s *storage) Has(path string) bool {

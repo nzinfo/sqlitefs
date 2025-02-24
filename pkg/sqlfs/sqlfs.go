@@ -21,14 +21,18 @@ const separator = filepath.Separator
 
 // Memory a very convenient filesystem based on memory files.
 type SQLiteFS struct {
-	s *storage
-	mu      sync.Mutex
+	s         *storage
+	mu        sync.Mutex
 	openFiles map[*file]bool
 }
 
 // New returns a new Memory filesystem.
 func NewSQLiteFS(dbName string) (billy.Filesystem, error) {
-	fs := &SQLiteFS{s: newStorage()}
+	s, err := newStorage(dbName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	fs := &SQLiteFS{s: s}
 	if _, err := fs.s.New("/", 0755|os.ModeDir, 0); err != nil {
 		log.Printf("failed to create root dir: %v", err)
 		return nil, err

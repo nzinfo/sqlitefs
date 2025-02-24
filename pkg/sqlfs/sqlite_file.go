@@ -94,7 +94,7 @@ func (f *file) Close() error {
 	}
 
 	f.isClosed = true
-	f.fs.removeOpenFile(f)
+	// f.fs.removeOpenFile(f)
 	return nil
 }
 
