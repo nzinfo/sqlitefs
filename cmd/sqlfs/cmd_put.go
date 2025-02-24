@@ -8,7 +8,7 @@ import (
 	"github.com/nzinfo/go-sqlfs/pkg/sqlfs"
 )
 
-func cmdPut(dbName string, args []string) {
+func cmdPut(dbName string, mirrorPath string, args []string) {
 	if len(args) < 2 {
 		fmt.Println("Usage: sqlfs put <src> <dst>")
 		os.Exit(1)

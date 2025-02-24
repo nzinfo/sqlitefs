@@ -8,6 +8,8 @@ import (
 
 func main() {
 	dbName := flag.String("db", "sqlfs.db", "SQLite database file")
+	mirrorPath := flag.String("mirror", "", "Specify a mirror path")
+
 	flag.Parse()
 
 	if len(flag.Args()) < 1 {
@@ -20,29 +22,29 @@ func main() {
 
 	switch command {
 	case "put":
-		cmdPut(*dbName, args)
+		cmdPut(*dbName, *mirrorPath, args)
 	case "get":
-		cmdGet(*dbName, args)
+		cmdGet(*dbName, *mirrorPath, args)
 	case "ls":
-		cmdLs(*dbName, args)
+		cmdLs(*dbName, *mirrorPath, args)
 	case "touch":
-		cmdTouch(*dbName, args)
+		cmdTouch(*dbName, *mirrorPath, args)
 	case "mv":
-		cmdMv(*dbName, args)
+		cmdMv(*dbName, *mirrorPath, args)
 	case "cat":
-		cmdCat(*dbName, args)
+		cmdCat(*dbName, *mirrorPath, args)
 	case "chmod":
-		cmdChmod(*dbName, args)
+		cmdChmod(*dbName, *mirrorPath, args)
 	case "chown":
-		cmdChown(*dbName, args)
+		cmdChown(*dbName, *mirrorPath, args)
 	case "mkdir":
-		cmdMkdir(*dbName, args)
+		cmdMkdir(*dbName, *mirrorPath, args)
 	case "rm":
-		cmdRm(*dbName, args)
+		cmdRm(*dbName, *mirrorPath, args)
 	case "link":
-		cmdLink(*dbName, args)
-	case "truncate":
-		cmdTruncate(*dbName, args)
+		cmdLink(*dbName, *mirrorPath, args)
+	//case "truncate":
+	//	cmdTruncate(*dbName, *mirrorPath, args)
 	case "help":
 		cmdHelp()
 	default:
