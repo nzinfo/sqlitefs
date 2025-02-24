@@ -1,23 +1,53 @@
 package sqlfs
 
 import (
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/golang/groupcache/lru"
 	"github.com/ncruces/go-sqlite3"
 )
+
+// AsyncResult represents an asynchronous operation result
+type AsyncResult[T any] struct {
+	Result T
+	Err    error
+	Done   chan struct{}
+}
+
+// NewAsyncResult creates a new AsyncResult
+func NewAsyncResult[T any]() *AsyncResult[T] {
+	return &AsyncResult[T]{
+		Done: make(chan struct{}),
+	}
+}
+
+// Wait waits for the async operation to complete and returns the result
+func (ar *AsyncResult[T]) Wait() (T, error) {
+	<-ar.Done
+	return ar.Result, ar.Err
+}
+
+// StorageOps defines the interface for storage operations
+type StorageOps interface {
+	// LoadEntry loads a single entry by its ID asynchronously
+	LoadEntry(entryID int64) *AsyncResult[*fileInfo]
+	
+	// LoadEntriesByParent loads all entries in a directory by parent_id asynchronously
+	LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo]
+}
 
 type storage struct {
 	files    map[string]*file
 	children map[string]map[string]*file
+
+	/// 新增的与 SQLiteFS 相关的字段
+	mu       sync.Mutex
 	conn     *sqlite3.Conn
+	dirCache *lru.Cache // LRU cache for directory information
 }
 
 func newStorage(dbName string) (*storage, error) {
@@ -37,162 +67,139 @@ func newStorage(dbName string) (*storage, error) {
 	}, nil
 }
 
-func (s *storage) Has(path string) bool {
+// getDir returns the dir object for a path, either from cache or by loading it
+func (s *storage) getDir(path string) (*dir, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Clean and normalize the path
 	path = clean(path)
 
-	_, ok := s.files[path]
-	return ok
-}
+	// Check if the exact path is in cache
+	if cached, ok := s.dirCache.Get(path); ok {
+		return cached.(*dir), nil
+	}
 
-func (s *storage) New(path string, mode fs.FileMode, flag int) (*file, error) {
-	path = clean(path)
-	if s.Has(path) {
-		if !s.MustGet(path).mode.IsDir() {
-			return nil, fmt.Errorf("file already exists %q", path)
+	// Stack to store paths that need to be loaded
+	type pathInfo struct {
+		path    string
+		entryID int64
+	}
+	var toLoad []pathInfo
+
+	// Start from the requested path and work up until we find a cached directory
+	current := path
+	var cachedDir *dir
+	for {
+		if current == "/" {
+			// Root directory is special case
+			if cached, ok := s.dirCache.Get("/"); ok {
+				cachedDir = cached.(*dir)
+				break
+			}
+
+			// Load root directory from database
+			rootEntriesResult := s.LoadEntriesByParent(0)
+			rootEntries, err := rootEntriesResult.Wait()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load root directory: %w", err)
+			}
+
+			// assert rootEntries must have only one entry
+			if len(rootEntries) != 1 {
+				return nil, fmt.Errorf("root directory must have only one entry")
+			}
+
+			rootID := rootEntries[0].entryID
+			// Load root's children
+			childrenResult := s.LoadEntriesByParent(rootID)
+			children, err := childrenResult.Wait()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load root directory children: %w", err)
+			}
+
+			entriesMap := make(map[string]fileInfo)
+			for _, entry := range children {
+				entriesMap[entry.name] = entry
+			}
+
+			cachedDir = &dir{
+				info:    rootEntries[0],
+				entries: entriesMap,
+			}
+
+			// Add root directory to cache
+			s.dirCache.Add("/", cachedDir)
+			break
 		}
 
-		return nil, nil
-	}
-
-	name := filepath.Base(path)
-
-	f := &file{
-		name:    name,
-		content: &content{name: name},
-		mode:    mode,
-		flag:    flag,
-		modTime: time.Now(),
-	}
-
-	s.files[path] = f
-	err := s.createParent(path, mode, f)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create parent: %w", err)
-	}
-
-	return f, nil
-}
-
-func (s *storage) createParent(path string, mode fs.FileMode, f *file) error {
-	base := filepath.Dir(path)
-	base = clean(base)
-	if f.Name() == string(separator) {
-		return nil
-	}
-
-	if _, err := s.New(base, mode.Perm()|os.ModeDir, 0); err != nil {
-		return err
-	}
-
-	if _, ok := s.children[base]; !ok {
-		s.children[base] = make(map[string]*file, 0)
-	}
-
-	s.children[base][f.Name()] = f
-	return nil
-}
-
-func (s *storage) Children(path string) []*file {
-	path = clean(path)
-
-	l := make([]*file, 0)
-	for _, f := range s.children[path] {
-		l = append(l, f)
-	}
-
-	return l
-}
-
-func (s *storage) MustGet(path string) *file {
-	f, ok := s.Get(path)
-	if !ok {
-		panic(fmt.Errorf("couldn't find %q", path))
-	}
-
-	return f
-}
-
-func (s *storage) Get(path string) (*file, bool) {
-	path = clean(path)
-	if !s.Has(path) {
-		return nil, false
-	}
-
-	file, ok := s.files[path]
-	return file, ok
-}
-
-func (s *storage) Rename(from, to string) error {
-	from = clean(from)
-	to = clean(to)
-
-	if !s.Has(from) {
-		return os.ErrNotExist
-	}
-
-	move := [][2]string{{from, to}}
-
-	for pathFrom := range s.files {
-		if pathFrom == from || !strings.HasPrefix(pathFrom, from) {
-			continue
+		if cached, ok := s.dirCache.Get(current); ok {
+			cachedDir = cached.(*dir)
+			break
 		}
 
-		rel, _ := filepath.Rel(from, pathFrom)
-		pathTo := filepath.Join(to, rel)
-
-		move = append(move, [2]string{pathFrom, pathTo})
+		// Add current path to the stack and move up
+		toLoad = append(toLoad, pathInfo{current, 0})
+		current = filepath.Dir(current)
 	}
 
-	for _, ops := range move {
-		from := ops[0]
-		to := ops[1]
+	// Now load directories from the closest cached ancestor down
+	var parentID int64
+	if cachedDir != nil {
+		parentID = cachedDir.info.entryID
+	}
 
-		if err := s.move(from, to); err != nil {
-			return err
+	// Process the stack from bottom (closest to cached) to top (requested path)
+	for i := len(toLoad) - 1; i >= 0; i-- {
+		info := &toLoad[i]
+
+		// Load directory entries using parent_id
+		entriesResult := s.LoadEntriesByParent(parentID)
+		entries, err := entriesResult.Wait()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load directory entries for %s: %w", info.path, err)
+		}
+
+		// Create new dir object
+		d := &dir{
+			entries: make(map[string]fileInfo),
+		}
+
+		// Add entries to the directory
+		for _, entry := range entries {
+			d.entries[entry.name] = entry
+			if entry.fileType == FileTypeDir {
+				parentID = entry.entryID // Update parent ID for next iteration
+			}
+		}
+
+		// Add to cache
+		s.dirCache.Add(info.path, d)
+
+		// If this is the requested path, return it
+		if info.path == path {
+			return d, nil
 		}
 	}
 
-	return nil
+	return nil, fmt.Errorf("failed to load directory %s", path)
 }
 
-func (s *storage) move(from, to string) error {
-	s.files[to] = s.files[from]
-	s.files[to].name = filepath.Base(to)
-	s.children[to] = s.children[from]
-
-	defer func() {
-		delete(s.children, from)
-		delete(s.files, from)
-		delete(s.children[filepath.Dir(from)], filepath.Base(from))
-	}()
-
-	return s.createParent(to, 0644, s.files[to])
-}
-
-func (s *storage) Remove(path string) error {
-	path = clean(path)
-
-	f, has := s.Get(path)
-	if !has {
-		return os.ErrNotExist
-	}
-
-	if f.mode.IsDir() && len(s.children[path]) != 0 {
-		return fmt.Errorf("dir: %s contains files", path)
-	}
-
-	base, file := filepath.Split(path)
-	base = filepath.Clean(base)
-
-	delete(s.children[base], file)
-	delete(s.files, path)
-	return nil
-}
+/////////////////////////////////////////////
 
 func clean(path string) string {
 	return filepath.Clean(filepath.FromSlash(path))
 }
 
+// /////////////////////////////////////////
+// dir represents a directory and its contents
+type dir struct {
+	info    fileInfo
+	entries map[string]fileInfo // Set of file names in this directory
+	// modTime time.Time           // Last modification time fileInfo 中有了。
+}
+
+// ////////////////////////////////////////
 type content struct {
 	name  string
 	bytes []byte
@@ -200,60 +207,16 @@ type content struct {
 	m sync.RWMutex
 }
 
-func (c *content) WriteAt(p []byte, off int64) (int, error) {
-	if off < 0 {
-		return 0, &os.PathError{
-			Op:   "writeat",
-			Path: c.name,
-			Err:  errors.New("negative offset"),
-		}
-	}
+//////////////////////////////////////////
 
-	c.m.Lock()
-	prev := len(c.bytes)
+type file struct {
+	name     string
+	content  *content
+	position int64
+	flag     int
+	mode     os.FileMode
+	modTime  time.Time
 
-	diff := int(off) - prev
-	if diff > 0 {
-		c.bytes = append(c.bytes, make([]byte, diff)...)
-	}
-
-	c.bytes = append(c.bytes[:off], p...)
-	if len(c.bytes) < prev {
-		c.bytes = c.bytes[:prev]
-	}
-	c.m.Unlock()
-
-	return len(p), nil
-}
-
-func (c *content) ReadAt(b []byte, off int64) (n int, err error) {
-	if off < 0 {
-		return 0, &os.PathError{
-			Op:   "readat",
-			Path: c.name,
-			Err:  errors.New("negative offset"),
-		}
-	}
-
-	c.m.RLock()
-	size := int64(len(c.bytes))
-	if off >= size {
-		c.m.RUnlock()
-		return 0, io.EOF
-	}
-
-	l := int64(len(b))
-	if off+l > size {
-		l = size - off
-	}
-
-	btr := c.bytes[off : off+l]
-	n = copy(b, btr)
-
-	if len(btr) < len(b) {
-		err = io.EOF
-	}
-	c.m.RUnlock()
-
-	return
+	isClosed bool
+	fs       *SQLiteFS
 }

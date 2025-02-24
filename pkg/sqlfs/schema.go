@@ -13,7 +13,7 @@ func InitDatabase(conn *sqlite3.Conn) error {
 		// Entries table for all filesystem entries (files, directories, symlinks)
 		`CREATE TABLE IF NOT EXISTS entries (
 			entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			parent_id INTEGER,  -- NULL for root directory
+			parent_id INTEGER,  -- 0 for root directory
 			name TEXT NOT NULL,
 			type TEXT NOT NULL CHECK(type IN ('file', 'dir', 'symlink')),
 			mode INTEGER NOT NULL,
@@ -62,7 +62,7 @@ func InitDatabase(conn *sqlite3.Conn) error {
 		`INSERT OR IGNORE INTO entries (
 			entry_id, name, parent_id, type, mode, uid, gid, target, create_at, modify_at
 		) VALUES (
-			1, '/', NULL, 'dir', 0755, 0, 0, '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+			1, '/', 0, 'dir', 0755, 0, 0, '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 		)`,
 	}
 

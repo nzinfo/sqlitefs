@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/helper/chroot"
@@ -244,4 +245,28 @@ func (fs *SQLiteFS) Capabilities() billy.Capability {
 		billy.ReadAndWriteCapability |
 		billy.SeekCapability |
 		billy.TruncateCapability
+}
+
+// ////////////////////////////////////////////
+
+type FileType string
+
+const (
+	FileTypeFile    FileType = "file"
+	FileTypeDir     FileType = "dir"
+	FileTypeSymlink FileType = "symlink"
+)
+
+type fileInfo struct {
+	entryID  int64       // Primary key from entries table
+	parentID int64       // Parent directory ID (0 for root)
+	name     string      // File/directory name
+	fileType FileType    // Type: 'file', 'dir', or 'symlink'
+	mode     os.FileMode // File mode/permissions
+	uid      int         // User ID
+	gid      int         // Group ID
+	target   string      // Symlink target or directory children
+	size     int64       // File size
+	createAt time.Time   // Creation time
+	modTime  time.Time   // Last modification time
 }

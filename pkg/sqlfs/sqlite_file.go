@@ -10,18 +10,6 @@ import (
 	"github.com/go-git/go-billy/v6"
 )
 
-type file struct {
-	name     string
-	content  *content
-	position int64
-	flag     int
-	mode     os.FileMode
-	modTime  time.Time
-
-	isClosed bool
-	fs       *SQLiteFS
-}
-
 func (f *file) Name() string {
 	return f.name
 }
@@ -133,7 +121,7 @@ func (f *file) Stat() (os.FileInfo, error) {
 	return &fileInfo{
 		name:    f.Name(),
 		mode:    f.mode,
-		size:    f.content.Len(),
+		size:    int64(f.content.Len()),
 		modTime: f.modTime,
 	}, nil
 }

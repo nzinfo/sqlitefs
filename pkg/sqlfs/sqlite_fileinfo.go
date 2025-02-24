@@ -6,13 +6,6 @@ import (
 	"time"
 )
 
-type fileInfo struct {
-	name    string
-	size    int
-	mode    os.FileMode
-	modTime time.Time
-}
-
 func (fi *fileInfo) Name() string {
 	return fi.name
 }
