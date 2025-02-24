@@ -3,15 +3,14 @@ package sqlfs
 import (
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
-	"time"
 
 	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/helper/chroot"
@@ -23,6 +22,8 @@ const separator = filepath.Separator
 // Memory a very convenient filesystem based on memory files.
 type SQLiteFS struct {
 	s *storage
+	mu      sync.Mutex
+	openFiles map[*file]bool
 }
 
 // New returns a new Memory filesystem.
@@ -32,6 +33,7 @@ func NewSQLiteFS(dbName string) (billy.Filesystem, error) {
 		log.Printf("failed to create root dir: %v", err)
 		return nil, err
 	}
+	fs.openFiles = make(map[*file]bool)
 	return chroot.New(fs, string(separator)), nil
 }
 
@@ -44,6 +46,9 @@ func (fs *SQLiteFS) Open(filename string) (billy.File, error) {
 }
 
 func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy.File, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
 	f, has := fs.s.Get(filename)
 	if !has {
 		if !isCreate(flag) {
@@ -71,7 +76,28 @@ func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy
 		return nil, fmt.Errorf("cannot open directory: %s", filename)
 	}
 
+	fs.openFiles[f] = true
 	return f.Duplicate(filename, perm, flag), nil
+}
+
+func (fs *SQLiteFS) removeOpenFile(f *file) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	delete(fs.openFiles, f)
+}
+
+func (fs *SQLiteFS) Close() error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	for f := range fs.openFiles {
+		if err := f.Close(); err != nil {
+			log.Printf("Error closing file: %v", err)
+		}
+		delete(fs.openFiles, f)
+	}
+
+	return nil
 }
 
 func (fs *SQLiteFS) resolveLink(fullpath string, f *file) (target string, isLink bool) {
@@ -214,210 +240,4 @@ func (fs *SQLiteFS) Capabilities() billy.Capability {
 		billy.ReadAndWriteCapability |
 		billy.SeekCapability |
 		billy.TruncateCapability
-}
-
-type file struct {
-	name     string
-	content  *content
-	position int64
-	flag     int
-	mode     os.FileMode
-	modTime  time.Time
-
-	isClosed bool
-}
-
-func (f *file) Name() string {
-	return f.name
-}
-
-func (f *file) Read(b []byte) (int, error) {
-	n, err := f.ReadAt(b, f.position)
-	f.position += int64(n)
-
-	if errors.Is(err, io.EOF) && n != 0 {
-		err = nil
-	}
-
-	return n, err
-}
-
-func (f *file) ReadAt(b []byte, off int64) (int, error) {
-	if f.isClosed {
-		return 0, os.ErrClosed
-	}
-
-	if !isReadAndWrite(f.flag) && !isReadOnly(f.flag) {
-		return 0, errors.New("read not supported")
-	}
-
-	n, err := f.content.ReadAt(b, off)
-
-	return n, err
-}
-
-func (f *file) Seek(offset int64, whence int) (int64, error) {
-	if f.isClosed {
-		return 0, os.ErrClosed
-	}
-
-	switch whence {
-	case io.SeekCurrent:
-		f.position += offset
-	case io.SeekStart:
-		f.position = offset
-	case io.SeekEnd:
-		f.position = int64(f.content.Len()) + offset
-	}
-
-	return f.position, nil
-}
-
-func (f *file) Write(p []byte) (int, error) {
-	return f.WriteAt(p, f.position)
-}
-
-func (f *file) WriteAt(p []byte, off int64) (int, error) {
-	if f.isClosed {
-		return 0, os.ErrClosed
-	}
-
-	if !isReadAndWrite(f.flag) && !isWriteOnly(f.flag) {
-		return 0, errors.New("write not supported")
-	}
-
-	f.modTime = time.Now()
-	n, err := f.content.WriteAt(p, off)
-	f.position = off + int64(n)
-
-	return n, err
-}
-
-func (f *file) Close() error {
-	if f.isClosed {
-		return os.ErrClosed
-	}
-
-	f.isClosed = true
-	return nil
-}
-
-func (f *file) Truncate(size int64) error {
-	if size < int64(len(f.content.bytes)) {
-		f.content.bytes = f.content.bytes[:size]
-	} else if more := int(size) - len(f.content.bytes); more > 0 {
-		f.content.bytes = append(f.content.bytes, make([]byte, more)...)
-	}
-
-	return nil
-}
-
-func (f *file) Duplicate(filename string, mode fs.FileMode, flag int) billy.File {
-	nf := &file{
-		name:    filename,
-		content: f.content,
-		mode:    mode,
-		flag:    flag,
-		modTime: f.modTime,
-	}
-
-	if isTruncate(flag) {
-		nf.content.Truncate()
-	}
-
-	if isAppend(flag) {
-		nf.position = int64(nf.content.Len())
-	}
-
-	return nf
-}
-
-func (f *file) Stat() (os.FileInfo, error) {
-	return &fileInfo{
-		name:    f.Name(),
-		mode:    f.mode,
-		size:    f.content.Len(),
-		modTime: f.modTime,
-	}, nil
-}
-
-// Lock is a no-op in memfs.
-func (f *file) Lock() error {
-	return nil
-}
-
-// Unlock is a no-op in memfs.
-func (f *file) Unlock() error {
-	return nil
-}
-
-type fileInfo struct {
-	name    string
-	size    int
-	mode    os.FileMode
-	modTime time.Time
-}
-
-func (fi *fileInfo) Name() string {
-	return fi.name
-}
-
-func (fi *fileInfo) Size() int64 {
-	return int64(fi.size)
-}
-
-func (fi *fileInfo) Mode() fs.FileMode {
-	return fi.mode
-}
-
-func (fi *fileInfo) ModTime() time.Time {
-	return fi.modTime
-}
-
-func (fi *fileInfo) IsDir() bool {
-	return fi.mode.IsDir()
-}
-
-func (*fileInfo) Sys() interface{} {
-	return nil
-}
-
-func (c *content) Truncate() {
-	c.bytes = make([]byte, 0)
-}
-
-func (c *content) Len() int {
-	return len(c.bytes)
-}
-
-func isCreate(flag int) bool {
-	return flag&os.O_CREATE != 0
-}
-
-func isExclusive(flag int) bool {
-	return flag&os.O_EXCL != 0
-}
-
-func isAppend(flag int) bool {
-	return flag&os.O_APPEND != 0
-}
-
-func isTruncate(flag int) bool {
-	return flag&os.O_TRUNC != 0
-}
-
-func isReadAndWrite(flag int) bool {
-	return flag&os.O_RDWR != 0
-}
-
-func isReadOnly(flag int) bool {
-	return flag == os.O_RDONLY
-}
-
-func isWriteOnly(flag int) bool {
-	return flag&os.O_WRONLY != 0
-}
-
-func isSymlink(m fs.FileMode) bool {
-	return m&os.ModeSymlink != 0
 }
