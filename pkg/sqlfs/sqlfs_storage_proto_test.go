@@ -1,4 +1,4 @@
-package sqlfs
+package sqlfs_test
 
 import (
 	"io/fs"
@@ -49,7 +49,7 @@ func setupTestStorage(t *testing.T) *storage {
 		if err := stmt.BindInt64(4, int64(mode & ^fs.ModePerm)); err != nil {
 			t.Fatal(err)
 		}
-		if err := stmt.BindInt64(5, int64(mode & fs.ModePerm)); err != nil {
+		if err := stmt.BindInt64(5, int64(mode&fs.ModePerm)); err != nil {
 			t.Fatal(err)
 		}
 		if err := stmt.BindInt64(6, 1000); err != nil {

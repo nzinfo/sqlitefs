@@ -214,10 +214,6 @@ func (c *content) ReadAt(b []byte, off int64) (n int, err error) {
 // LoadEntry implements StorageOps.LoadEntry
 func (s *storage) LoadEntry(entryID int64) *AsyncResult[*fileInfo] {
 	result := NewAsyncResult[*fileInfo]()
-	if cached, ok := s.entriesCache.Get(entryID); ok {
-		result.Complete(cached.(*fileInfo), nil)
-		return result
-	}
 
 	// Load from database if not cached
 	go func() {
@@ -226,7 +222,6 @@ func (s *storage) LoadEntry(entryID int64) *AsyncResult[*fileInfo] {
 			result.Complete(nil, err)
 			return
 		}
-		s.entriesCache.Add(entryID, fi)
 		result.Complete(fi, nil)
 	}()
 	return result

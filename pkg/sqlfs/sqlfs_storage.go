@@ -82,14 +82,6 @@ func clean(path string) string {
 	return filepath.Clean(filepath.FromSlash(path))
 }
 
-// /////////////////////////////////////////
-// dir represents a directory and its contents
-type dir struct {
-	info    fileInfo
-	entries map[string]fileInfo // Set of file names in this directory
-	// modTime time.Time           // Last modification time fileInfo 中有了。
-}
-
 // ////////////////////////////////////////
 type content struct {
 	name  string
@@ -110,4 +102,57 @@ type file struct {
 
 	isClosed bool
 	fs       *SQLiteFS
+}
+
+// ErrFileNotFound represents an error when a file is not found in the storage.
+type ErrFileNotFound struct {
+	Path string
+}
+
+func (e *ErrFileNotFound) Error() string {
+	return fmt.Sprintf("file not found: %s", e.Path)
+}
+
+// getEntry retrieves the fileInfo for the given full_path, recursively searching through directories.
+func (s *storage) getEntry(full_path string) (*fileInfo, error) {
+	// Clean and normalize the path
+	full_path = clean(full_path)
+
+	// Check cache first
+	if cached, ok := s.entriesCache.Get(full_path); ok {
+		return cached.(*fileInfo), nil
+	}
+
+	// Split into directory and file name
+	dirPath := filepath.Dir(full_path)
+	fileName := filepath.Base(full_path)
+
+	var parentID int64
+
+	// If there's a directory part, get its entry
+	if dirPath != "" {
+		parentDirInfo, err := s.getEntry(dirPath)
+		if err != nil {
+			return nil, err
+		}
+		parentID = parentDirInfo.entryID
+	}
+
+	// Load entries in the parent directory
+	entriesResult := s.LoadEntriesByParent(parentID)
+	entries, err := entriesResult.Wait()
+	if err != nil {
+		return nil, err
+	}
+
+	// Check for the file in the loaded entries
+	for _, entry := range entries {
+		if entry.name == fileName {
+			s.entriesCache.Add(full_path, &entry) // Add to cache
+			return &entry, nil
+		}
+	}
+
+	// If we reach here, the file was not found
+	return nil, &ErrFileNotFound{Path: full_path}
 }
