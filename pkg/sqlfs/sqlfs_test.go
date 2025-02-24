@@ -18,14 +18,16 @@ import (
 var _ fs.File = &file{}
 
 func TestRootExists(t *testing.T) {
-	fs := New()
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
 	f, err := fs.Stat("/")
 	require.NoError(t, err)
 	assert.True(t, f.IsDir())
 }
 
 func TestCapabilities(t *testing.T) {
-	fs := New()
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
 	_, ok := fs.(billy.Capable)
 	assert.True(t, ok)
 
@@ -34,8 +36,9 @@ func TestCapabilities(t *testing.T) {
 }
 
 func TestModTime(t *testing.T) {
-	fs := New()
-	_, err := fs.Create("/file1")
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
+	_, err = fs.Create("/file1")
 	require.NoError(t, err)
 
 	if runtime.GOOS == "windows" {
@@ -67,7 +70,8 @@ func TestModTime(t *testing.T) {
 }
 
 func TestNegativeOffsets(t *testing.T) {
-	fs := New()
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
 	f, err := fs.Create("negative")
 	require.NoError(t, err)
 
@@ -82,7 +86,8 @@ func TestNegativeOffsets(t *testing.T) {
 }
 
 func TestExclusive(t *testing.T) {
-	fs := New()
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
 	f, err := fs.OpenFile("exclusive", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0666)
 	require.NoError(t, err)
 
@@ -103,7 +108,8 @@ func TestOrder(t *testing.T) {
 		"b",
 		"c",
 	}
-	fs := New()
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
 	for _, f := range files {
 		_, err = fs.Create(f)
 		require.NoError(t, err)
@@ -121,15 +127,17 @@ func TestOrder(t *testing.T) {
 }
 
 func TestNotFound(t *testing.T) {
-	fs := New()
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
 	files, err := fs.ReadDir("asdf")
 	assert.Len(t, files, 0)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestTruncateAppend(t *testing.T) {
-	fs := New()
-	err := util.WriteFile(fs, "truncate_append", []byte("file-content"), 0666)
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
+	err = util.WriteFile(fs, "truncate_append", []byte("file-content"), 0666)
 	require.NoError(t, err)
 
 	f, err := fs.OpenFile("truncate_append", os.O_WRONLY|os.O_TRUNC|os.O_APPEND, 0666)
@@ -188,7 +196,8 @@ func TestReadlink(t *testing.T) {
 		tests[3].want = "\\c:\\test\\123"
 	}
 
-	fs := New()
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
 
 	// arrange fs for tests.
 	require.NoError(t, fs.Symlink("/self", "/self"))
@@ -284,10 +293,11 @@ func TestSymlink2(t *testing.T) {
 		tests[4].want = "\\c:\\foor\\bar"
 	}
 
-	fs := New()
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
 
 	// arrange fs for tests.
-	err := fs.MkdirAll("/dir", 0o600)
+	err = fs.MkdirAll("/dir", 0o600)
 	require.NoError(t, err)
 	_, err = fs.Create("/file")
 	require.NoError(t, err)
@@ -338,15 +348,18 @@ func TestJoin(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := New().Join(tc.elem...)
+			fs, err := NewSQLiteFS(":memory:")
+			require.NoError(t, err)
+			got := fs.Join(tc.elem...)
 			assert.Equal(t, tc.want, got)
 		})
 	}
 }
 
 func TestSymlink(t *testing.T) {
-	fs := New()
-	err := fs.Symlink("test", "test")
+	fs, err := NewSQLiteFS(":memory:")
+	require.NoError(t, err)
+	err = fs.Symlink("test", "test")
 	require.NoError(t, err)
 
 	f, err := fs.Open("test")
