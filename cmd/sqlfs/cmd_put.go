@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/osfs"
 	"github.com/nzinfo/go-sqlfs/pkg/sqlfs"
 )
@@ -32,12 +31,6 @@ func cmdPut(dbName string, mirrorPath string, args []string) {
 	}
 	defer srcFile.Close()
 
-	// Initialize osfs for mirror only if mirrorPath is not empty
-	var mirrorFS billy.Filesystem
-	if mirrorPath != "" {
-		mirrorFS = osfs.New(mirrorPath)
-	}
-
 	dstFile, err := fs.Create(dst)
 	if err != nil {
 		fmt.Printf("Failed to create destination file: %v\n", err)
@@ -52,12 +45,15 @@ func cmdPut(dbName string, mirrorPath string, args []string) {
 
 	// If mirrorFS is initialized, also copy to mirror
 	if mirrorPath != "" {
+		mirrorFS := osfs.New(mirrorPath)
 		mirrorDstFile, err := mirrorFS.Create(dst)
 		if err != nil {
 			fmt.Printf("Failed to create mirror destination file: %v\n", err)
 			os.Exit(1)
 		}
 		defer mirrorDstFile.Close()
+
+		srcFile.Seek(0, 0) // Reset file pointer to beginning
 
 		if _, err := io.Copy(mirrorDstFile, srcFile); err != nil {
 			fmt.Printf("Failed to copy file to mirror: %v\n", err)

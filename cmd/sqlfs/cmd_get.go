@@ -1,11 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
 
-	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/osfs"
 	"github.com/nzinfo/go-sqlfs/pkg/sqlfs"
 )
@@ -32,12 +32,6 @@ func cmdGet(dbName string, mirrorPath string, args []string) {
 	}
 	defer srcFile.Close()
 
-	// Initialize osfs for mirror only if mirrorPath is not empty
-	var mirrorFS billy.Filesystem
-	if mirrorPath != "" {
-		mirrorFS = osfs.New(mirrorPath)
-	}
-
 	dstFile, err := os.Create(dst)
 	if err != nil {
 		fmt.Printf("Failed to create destination file: %v\n", err)
@@ -50,18 +44,35 @@ func cmdGet(dbName string, mirrorPath string, args []string) {
 		os.Exit(1)
 	}
 
-	// If mirrorFS is initialized, also copy to mirror
-	if mirrorPath != "" && mirrorFS != nil {
-		mirrorDstFile, err := mirrorFS.Create(dst)
+	// If mirrorPath is set, check content consistency
+	if mirrorPath != "" {
+		mirrorFS := osfs.New(mirrorPath)
+
+		// Read content from SQLiteFS
+		srcFile.Seek(0, 0) // Reset file pointer to beginning
+		sqlContent, err := io.ReadAll(srcFile)
 		if err != nil {
-			fmt.Printf("Failed to create mirror destination file: %v\n", err)
+			fmt.Printf("Failed to read file from SQLiteFS: %v\n", err)
 			os.Exit(1)
 		}
-		defer mirrorDstFile.Close()
 
-		if _, err := io.Copy(mirrorDstFile, srcFile); err != nil {
-			fmt.Printf("Failed to copy file to mirror: %v\n", err)
+		// Read content from mirrorFS for comparison
+		mirrorSrcFile, err := mirrorFS.Open(src)
+		if err != nil {
+			fmt.Printf("Failed to open mirror source file: %v\n", err)
 			os.Exit(1)
+		}
+		defer mirrorSrcFile.Close()
+
+		mirrorContent, err := io.ReadAll(mirrorSrcFile)
+		if err != nil {
+			fmt.Printf("Failed to read file from mirror: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Compare contents
+		if !bytes.Equal(sqlContent, mirrorContent) {
+			fmt.Printf("Warning: Content mismatch between SQLiteFS and mirror for file %s\n", src)
 		}
 	}
 
