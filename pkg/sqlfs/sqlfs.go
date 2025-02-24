@@ -1,4 +1,3 @@
-// Package memfs provides a billy filesystem base on memory.
 package sqlfs
 
 import (
@@ -22,29 +21,29 @@ import (
 const separator = filepath.Separator
 
 // Memory a very convenient filesystem based on memory files.
-type Memory struct {
+type SQLiteFS struct {
 	s *storage
 }
 
 // New returns a new Memory filesystem.
-func New() billy.Filesystem {
-	fs := &Memory{s: newStorage()}
-	_, err := fs.s.New("/", 0755|os.ModeDir, 0)
-	if err != nil {
+func NewSQLiteFS(dbName string) (billy.Filesystem, error) {
+	fs := &SQLiteFS{s: newStorage()}
+	if _, err := fs.s.New("/", 0755|os.ModeDir, 0); err != nil {
 		log.Printf("failed to create root dir: %v", err)
+		return nil, err
 	}
-	return chroot.New(fs, string(separator))
+	return chroot.New(fs, string(separator)), nil
 }
 
-func (fs *Memory) Create(filename string) (billy.File, error) {
+func (fs *SQLiteFS) Create(filename string) (billy.File, error) {
 	return fs.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 }
 
-func (fs *Memory) Open(filename string) (billy.File, error) {
+func (fs *SQLiteFS) Open(filename string) (billy.File, error) {
 	return fs.OpenFile(filename, os.O_RDONLY, 0)
 }
 
-func (fs *Memory) OpenFile(filename string, flag int, perm fs.FileMode) (billy.File, error) {
+func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy.File, error) {
 	f, has := fs.s.Get(filename)
 	if !has {
 		if !isCreate(flag) {
@@ -75,7 +74,7 @@ func (fs *Memory) OpenFile(filename string, flag int, perm fs.FileMode) (billy.F
 	return f.Duplicate(filename, perm, flag), nil
 }
 
-func (fs *Memory) resolveLink(fullpath string, f *file) (target string, isLink bool) {
+func (fs *SQLiteFS) resolveLink(fullpath string, f *file) (target string, isLink bool) {
 	if !isSymlink(f.mode) {
 		return fullpath, false
 	}
@@ -95,7 +94,7 @@ func isAbs(path string) bool {
 	return filepath.IsAbs(path) || strings.HasPrefix(path, string(separator))
 }
 
-func (fs *Memory) Stat(filename string) (os.FileInfo, error) {
+func (fs *SQLiteFS) Stat(filename string) (os.FileInfo, error) {
 	f, has := fs.s.Get(filename)
 	if !has {
 		return nil, os.ErrNotExist
@@ -118,7 +117,7 @@ func (fs *Memory) Stat(filename string) (os.FileInfo, error) {
 	return fi, nil
 }
 
-func (fs *Memory) Lstat(filename string) (os.FileInfo, error) {
+func (fs *SQLiteFS) Lstat(filename string) (os.FileInfo, error) {
 	f, has := fs.s.Get(filename)
 	if !has {
 		return nil, os.ErrNotExist
@@ -133,7 +132,7 @@ func (a ByName) Len() int           { return len(a) }
 func (a ByName) Less(i, j int) bool { return a[i].Name() < a[j].Name() }
 func (a ByName) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 
-func (fs *Memory) ReadDir(path string) ([]os.FileInfo, error) {
+func (fs *SQLiteFS) ReadDir(path string) ([]os.FileInfo, error) {
 	if f, has := fs.s.Get(path); has {
 		if target, isLink := fs.resolveLink(path, f); isLink {
 			if target != path {
@@ -155,30 +154,30 @@ func (fs *Memory) ReadDir(path string) ([]os.FileInfo, error) {
 	return entries, nil
 }
 
-func (fs *Memory) MkdirAll(path string, perm fs.FileMode) error {
+func (fs *SQLiteFS) MkdirAll(path string, perm fs.FileMode) error {
 	_, err := fs.s.New(path, perm|os.ModeDir, 0)
 	return err
 }
 
-func (fs *Memory) TempFile(dir, prefix string) (billy.File, error) {
+func (fs *SQLiteFS) TempFile(dir, prefix string) (billy.File, error) {
 	return util.TempFile(fs, dir, prefix)
 }
 
-func (fs *Memory) Rename(from, to string) error {
+func (fs *SQLiteFS) Rename(from, to string) error {
 	return fs.s.Rename(from, to)
 }
 
-func (fs *Memory) Remove(filename string) error {
+func (fs *SQLiteFS) Remove(filename string) error {
 	return fs.s.Remove(filename)
 }
 
 // Falls back to Go's filepath.Join, which works differently depending on the
 // OS where the code is being executed.
-func (fs *Memory) Join(elem ...string) string {
+func (fs *SQLiteFS) Join(elem ...string) string {
 	return filepath.Join(elem...)
 }
 
-func (fs *Memory) Symlink(target, link string) error {
+func (fs *SQLiteFS) Symlink(target, link string) error {
 	_, err := fs.Lstat(link)
 	if err == nil {
 		return os.ErrExist
@@ -191,7 +190,7 @@ func (fs *Memory) Symlink(target, link string) error {
 	return util.WriteFile(fs, link, []byte(target), 0777|os.ModeSymlink)
 }
 
-func (fs *Memory) Readlink(link string) (string, error) {
+func (fs *SQLiteFS) Readlink(link string) (string, error) {
 	f, has := fs.s.Get(link)
 	if !has {
 		return "", os.ErrNotExist
@@ -209,7 +208,7 @@ func (fs *Memory) Readlink(link string) (string, error) {
 }
 
 // Capabilities implements the Capable interface.
-func (fs *Memory) Capabilities() billy.Capability {
+func (fs *SQLiteFS) Capabilities() billy.Capability {
 	return billy.WriteCapability |
 		billy.ReadCapability |
 		billy.ReadAndWriteCapability |

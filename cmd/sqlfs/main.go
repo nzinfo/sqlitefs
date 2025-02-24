@@ -11,7 +11,7 @@ func main() {
 	flag.Parse()
 
 	if len(flag.Args()) < 1 {
-		fmt.Println("Usage: sqlfs [--db=<db_name>] <command>")
+		cmdHelp()
 		os.Exit(1)
 	}
 
@@ -43,6 +43,8 @@ func main() {
 		cmdLink(*dbName, args)
 	case "truncate":
 		cmdTruncate(*dbName, args)
+	case "help":
+		cmdHelp()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		os.Exit(1)
