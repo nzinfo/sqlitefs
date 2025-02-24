@@ -1,4 +1,4 @@
-package sqlfs_test
+package sqlfs
 
 import (
 	"io/fs"
