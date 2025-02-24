@@ -31,11 +31,17 @@ func (ar *AsyncResult[T]) Wait() (T, error) {
 	return ar.Result, ar.Err
 }
 
+func (ar *AsyncResult[T]) Complete(result T, err error) {
+	ar.Result = result
+	ar.Err = err
+	close(ar.Done)
+}
+
 // StorageOps defines the interface for storage operations
 type StorageOps interface {
 	// LoadEntry loads a single entry by its ID asynchronously
 	LoadEntry(entryID int64) *AsyncResult[*fileInfo]
-	
+
 	// LoadEntriesByParent loads all entries in a directory by parent_id asynchronously
 	LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo]
 }
@@ -45,9 +51,10 @@ type storage struct {
 	children map[string]map[string]*file
 
 	/// 新增的与 SQLiteFS 相关的字段
-	mu       sync.Mutex
-	conn     *sqlite3.Conn
-	dirCache *lru.Cache // LRU cache for directory information
+	mu           sync.Mutex
+	conn         *sqlite3.Conn
+	entriesCache *lru.Cache // LRU cache for file/directory information, full_path -> entryId.
+	dirsCache    *lru.Cache // LRU cache for directory information	entryId -> infoList.
 }
 
 func newStorage(dbName string) (*storage, error) {
@@ -61,128 +68,12 @@ func newStorage(dbName string) (*storage, error) {
 	}
 
 	return &storage{
-		files:    make(map[string]*file, 0),
-		children: make(map[string]map[string]*file, 0),
-		conn:     conn,
+		files:        make(map[string]*file, 0),
+		children:     make(map[string]map[string]*file, 0),
+		conn:         conn,
+		entriesCache: lru.New(500), // Initialize entries cache
+		dirsCache:    lru.New(100), // Initialize directories cache
 	}, nil
-}
-
-// getDir returns the dir object for a path, either from cache or by loading it
-func (s *storage) getDir(path string) (*dir, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Clean and normalize the path
-	path = clean(path)
-
-	// Check if the exact path is in cache
-	if cached, ok := s.dirCache.Get(path); ok {
-		return cached.(*dir), nil
-	}
-
-	// Stack to store paths that need to be loaded
-	type pathInfo struct {
-		path    string
-		entryID int64
-	}
-	var toLoad []pathInfo
-
-	// Start from the requested path and work up until we find a cached directory
-	current := path
-	var cachedDir *dir
-	for {
-		if current == "/" {
-			// Root directory is special case
-			if cached, ok := s.dirCache.Get("/"); ok {
-				cachedDir = cached.(*dir)
-				break
-			}
-
-			// Load root directory from database
-			rootEntriesResult := s.LoadEntriesByParent(0)
-			rootEntries, err := rootEntriesResult.Wait()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load root directory: %w", err)
-			}
-
-			// assert rootEntries must have only one entry
-			if len(rootEntries) != 1 {
-				return nil, fmt.Errorf("root directory must have only one entry")
-			}
-
-			rootID := rootEntries[0].entryID
-			// Load root's children
-			childrenResult := s.LoadEntriesByParent(rootID)
-			children, err := childrenResult.Wait()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load root directory children: %w", err)
-			}
-
-			entriesMap := make(map[string]fileInfo)
-			for _, entry := range children {
-				entriesMap[entry.name] = entry
-			}
-
-			cachedDir = &dir{
-				info:    rootEntries[0],
-				entries: entriesMap,
-			}
-
-			// Add root directory to cache
-			s.dirCache.Add("/", cachedDir)
-			break
-		}
-
-		if cached, ok := s.dirCache.Get(current); ok {
-			cachedDir = cached.(*dir)
-			break
-		}
-
-		// Add current path to the stack and move up
-		toLoad = append(toLoad, pathInfo{current, 0})
-		current = filepath.Dir(current)
-	}
-
-	// Now load directories from the closest cached ancestor down
-	var parentID int64
-	if cachedDir != nil {
-		parentID = cachedDir.info.entryID
-	}
-
-	// Process the stack from bottom (closest to cached) to top (requested path)
-	for i := len(toLoad) - 1; i >= 0; i-- {
-		info := &toLoad[i]
-
-		// Load directory entries using parent_id
-		entriesResult := s.LoadEntriesByParent(parentID)
-		entries, err := entriesResult.Wait()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load directory entries for %s: %w", info.path, err)
-		}
-
-		// Create new dir object
-		d := &dir{
-			entries: make(map[string]fileInfo),
-		}
-
-		// Add entries to the directory
-		for _, entry := range entries {
-			d.entries[entry.name] = entry
-			if entry.fileType == FileTypeDir {
-				parentID = entry.entryID // Update parent ID for next iteration
-			}
-		}
-
-		// Add to cache
-		s.dirCache.Add(info.path, d)
-
-		// If this is the requested path, return it
-		if info.path == path {
-			return d, nil
-		}
-	}
-
-	return nil, fmt.Errorf("failed to load directory %s", path)
 }
 
 /////////////////////////////////////////////

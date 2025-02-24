@@ -2,12 +2,12 @@
 
 package sqlfs
 
-func (s *storage) loadEntry(entryID int64) (*fileInfo, error) {
-
-	return nil, nil
+func (s *storage) LoadEntry(entryID int64) *AsyncResult[*fileInfo] {
+	result := NewAsyncResult[*fileInfo]()
+	return result
 }
 
-func (s *storage) loadEntriesByParentDir(parentID int64) ([]fileInfo, error) {
-
-	return nil, nil
+func (s *storage) LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo] {
+	result := NewAsyncResult[[]fileInfo]()
+	return result
 }

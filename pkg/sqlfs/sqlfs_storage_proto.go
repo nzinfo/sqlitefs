@@ -214,26 +214,42 @@ func (c *content) ReadAt(b []byte, off int64) (n int, err error) {
 // LoadEntry implements StorageOps.LoadEntry
 func (s *storage) LoadEntry(entryID int64) *AsyncResult[*fileInfo] {
 	result := NewAsyncResult[*fileInfo]()
+	if cached, ok := s.entriesCache.Get(entryID); ok {
+		result.Complete(cached.(*fileInfo), nil)
+		return result
+	}
 
-	// Execute synchronously since this is the prototype implementation
-	fi, err := s.loadEntrySync(entryID)
-	result.Result = fi
-	result.Err = err
-	close(result.Done)
-
+	// Load from database if not cached
+	go func() {
+		fi, err := s.loadEntrySync(entryID)
+		if err != nil {
+			result.Complete(nil, err)
+			return
+		}
+		s.entriesCache.Add(entryID, fi)
+		result.Complete(fi, nil)
+	}()
 	return result
 }
 
 // LoadEntriesByParent implements StorageOps.LoadEntriesByParent
 func (s *storage) LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo] {
 	result := NewAsyncResult[[]fileInfo]()
+	if cached, ok := s.dirsCache.Get(parentID); ok {
+		result.Complete(cached.([]fileInfo), nil)
+		return result
+	}
 
-	// Execute synchronously since this is the prototype implementation
-	entries, err := s.loadEntriesByParentSync(parentID)
-	result.Result = entries
-	result.Err = err
-	close(result.Done)
-
+	// Load from database if not cached
+	go func() {
+		entries, err := s.loadEntriesByParentSync(parentID)
+		if err != nil {
+			result.Complete(nil, err)
+			return
+		}
+		s.dirsCache.Add(parentID, entries)
+		result.Complete(entries, nil)
+	}()
 	return result
 }
 
