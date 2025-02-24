@@ -225,7 +225,7 @@ func TestGetDirCaching(t *testing.T) {
 	assert.NotNil(t, dir1)
 
 	// Modify the mock data to ensure subsequent access uses cache
-	delete(ms.mockDirs[1], 0) // Remove dir1 from root
+	ms.mockDirs = make(map[int64][]int64) // Initialize map with correct type
 	
 	// Second access should use cache
 	dir2, err := ms.getDir("/dir1")

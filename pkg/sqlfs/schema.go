@@ -2,6 +2,7 @@ package sqlfs
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/ncruces/go-sqlite3"
 	_ "github.com/ncruces/go-sqlite3/embed"
@@ -13,18 +14,17 @@ func InitDatabase(conn *sqlite3.Conn) error {
 		// Entries table for all filesystem entries (files, directories, symlinks)
 		`CREATE TABLE IF NOT EXISTS entries (
 			entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			parent_id INTEGER,  -- 0 for root directory
+			parent_id INTEGER NOT NULL,
 			name TEXT NOT NULL,
-			type TEXT NOT NULL CHECK(type IN ('file', 'dir', 'symlink')),
-			mode INTEGER NOT NULL,
+			mode_type INTEGER NOT NULL,  -- High bits for special modes (ModeDir, etc)
+			mode_perm INTEGER NOT NULL,  -- Low bits for permissions (0755, etc)
 			uid INTEGER NOT NULL,
 			gid INTEGER NOT NULL,
 			target TEXT,  -- For symlinks: target path; For dirs: JSON array of child entry_ids
 			create_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			modify_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(parent_id, name),
-			FOREIGN KEY(parent_id) REFERENCES entries(entry_id)
-		)`,
+			UNIQUE(parent_id, name)
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(parent_id)`,
 
 		// File tags for metadata and search
@@ -34,7 +34,7 @@ func InitDatabase(conn *sqlite3.Conn) error {
 			create_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (entry_id, tag),
 			FOREIGN KEY(entry_id) REFERENCES entries(entry_id)
-		)`,
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_file_tags ON file_tags(tag)`,
 
 		// Blocks table stores actual file content
@@ -55,14 +55,14 @@ func InitDatabase(conn *sqlite3.Conn) error {
 			PRIMARY KEY (entry_id, offset),
 			FOREIGN KEY(entry_id) REFERENCES entries(entry_id),
 			FOREIGN KEY(block_id) REFERENCES blocks(block_id)
-		)`,
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_chunks_block ON file_chunks(block_id)`,
 
 		// Create root directory if it doesn't exist
 		`INSERT OR IGNORE INTO entries (
-			entry_id, name, parent_id, type, mode, uid, gid, target, create_at, modify_at
+			entry_id, name, parent_id, mode_type, mode_perm, uid, gid, target, create_at, modify_at
 		) VALUES (
-			1, '/', 0, 'dir', 0755, 0, 0, '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+			1, '/', 0, ` + fmt.Sprintf("%d", os.ModeDir) + `, ` + fmt.Sprintf("%d", 0755) + `, 0, 0, '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 		)`,
 	}
 
@@ -72,16 +72,15 @@ func InitDatabase(conn *sqlite3.Conn) error {
 		if err != nil {
 			return fmt.Errorf("prepare table creation error: %v", err)
 		}
-		if tail != "" {
-			stmt.Close()
-			return fmt.Errorf("unexpected tail in table creation SQL: %s", tail)
-		}
 		defer stmt.Close()
 
-		if !stmt.Step() {
-			if err := stmt.Err(); err != nil {
-				return fmt.Errorf("execute table creation error: %v", err)
-			}
+		if tail != "" {
+			stmt.Close()
+			return fmt.Errorf("unexpected tail in SQL: %s", tail)
+		}
+
+		if err := stmt.Exec(); err != nil {
+			return fmt.Errorf("execute table creation error: %v", err)
 		}
 	}
 
@@ -93,4 +92,6 @@ const (
 	MinBlockSize   = 4 * 1024        // 4KB minimum block size
 	MaxBlockSize   = 2 * 1024 * 1024 // 2MB maximum block size
 	BlockAlignment = 4 * 1024        // 4KB alignment requirement
+	ModeDirValue   = os.ModeDir
+	ModePermValue  = 0755
 )

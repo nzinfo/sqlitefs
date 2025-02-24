@@ -216,7 +216,7 @@ func (s *storage) LoadEntry(entryID int64) *AsyncResult[*fileInfo] {
 	result := NewAsyncResult[*fileInfo]()
 
 	// Execute synchronously since this is the prototype implementation
-	fi, err := s.loadEntry(entryID)
+	fi, err := s.loadEntrySync(entryID)
 	result.Result = fi
 	result.Err = err
 	close(result.Done)
@@ -229,7 +229,7 @@ func (s *storage) LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo] {
 	result := NewAsyncResult[[]fileInfo]()
 
 	// Execute synchronously since this is the prototype implementation
-	entries, err := s.loadEntriesByParent(parentID)
+	entries, err := s.loadEntriesByParentSync(parentID)
 	result.Result = entries
 	result.Err = err
 	close(result.Done)
@@ -238,9 +238,9 @@ func (s *storage) LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo] {
 }
 
 // loadEntry loads a single entry by its ID
-func (s *storage) loadEntry(entryID int64) (*fileInfo, error) {
+func (s *storage) loadEntrySync(entryID int64) (*fileInfo, error) {
 	stmt, tail, err := s.conn.Prepare(`
-		SELECT entry_id, parent_id, name, type, mode, uid, gid, target, create_at, modify_at
+		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
 		FROM entries
 		WHERE entry_id = ?
 	`)
@@ -267,12 +267,16 @@ func (s *storage) loadEntry(entryID int64) (*fileInfo, error) {
 	createTime := time.Unix(stmt.ColumnInt64(8), 0)
 	modTime := time.Unix(stmt.ColumnInt64(9), 0)
 
+	// Combine mode_type and mode_perm
+	modeType := stmt.ColumnInt64(3)
+	modePerm := stmt.ColumnInt64(4)
+	mode := fs.FileMode(modeType | modePerm)
+
 	fi := &fileInfo{
 		entryID:  stmt.ColumnInt64(0),
 		parentID: stmt.ColumnInt64(1),
 		name:     stmt.ColumnText(2),
-		fileType: FileType(stmt.ColumnText(3)),
-		mode:     fs.FileMode(stmt.ColumnInt64(4)),
+		mode:     mode,
 		uid:      int(stmt.ColumnInt64(5)),
 		gid:      int(stmt.ColumnInt64(6)),
 		target:   stmt.ColumnText(7),
@@ -284,9 +288,9 @@ func (s *storage) loadEntry(entryID int64) (*fileInfo, error) {
 }
 
 // loadEntriesByParent loads all entries in a directory by parent_id
-func (s *storage) loadEntriesByParent(parentID int64) ([]fileInfo, error) {
+func (s *storage) loadEntriesByParentSync(parentID int64) ([]fileInfo, error) {
 	stmt, tail, err := s.conn.Prepare(`
-		SELECT entry_id, parent_id, name, type, mode, uid, gid, target, create_at, modify_at
+		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
 		FROM entries
 		WHERE parent_id = ?
 	`)
@@ -312,12 +316,16 @@ func (s *storage) loadEntriesByParent(parentID int64) ([]fileInfo, error) {
 		createTime := time.Unix(stmt.ColumnInt64(8), 0)
 		modTime := time.Unix(stmt.ColumnInt64(9), 0)
 
+		// Combine mode_type and mode_perm
+		modeType := stmt.ColumnInt64(3)
+		modePerm := stmt.ColumnInt64(4)
+		mode := fs.FileMode(modeType | modePerm)
+
 		fi := fileInfo{
 			entryID:  stmt.ColumnInt64(0),
 			parentID: stmt.ColumnInt64(1),
 			name:     stmt.ColumnText(2),
-			fileType: FileType(stmt.ColumnText(3)),
-			mode:     fs.FileMode(stmt.ColumnInt64(4)),
+			mode:     mode,
 			uid:      int(stmt.ColumnInt64(5)),
 			gid:      int(stmt.ColumnInt64(6)),
 			target:   stmt.ColumnText(7),
