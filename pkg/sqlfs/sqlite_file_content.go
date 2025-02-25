@@ -11,7 +11,7 @@ type fileChunk struct {
 	size        int64 // Size of this chunk
 	blockID     int64 // ID of the block containing the chunk data
 	blockOffset int64 // Offset within the block where chunk data starts
-	bytes       []byte
+	// bytes       []byte
 }
 
 // fileContent manages file chunks using a segment tree for efficient range queries
@@ -261,9 +261,7 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 	chunk := fileChunk{
 		offset: offset,
 		size:   int64(len(p)),
-		bytes:  make([]byte, len(p)),
 	}
-	copy(chunk.bytes, p)
 
 	// 添加新chunk
 	newIndex := len(fc.chunks)

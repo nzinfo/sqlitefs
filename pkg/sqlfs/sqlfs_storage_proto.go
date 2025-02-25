@@ -296,23 +296,6 @@ func (s *storage) Rename(from, to string) error {
 	return nil
 }
 
-/*
-func (s *storage) move(from, to string) error {
-	if s.Has(to) {
-		return fmt.Errorf("file already exists %q", to)
-	}
-
-	f, ok := s.files[from]
-	if !ok {
-		return os.ErrNotExist
-	}
-
-	s.files[to] = f
-	delete(s.files, from)
-	return nil
-}
-*/
-
 func (s *storage) Remove(path string) error {
 	path = clean(path)
 

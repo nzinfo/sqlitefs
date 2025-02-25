@@ -11,6 +11,13 @@ import (
 	"github.com/ncruces/go-sqlite3"
 )
 
+const (
+	// 存储层基本参数
+	DefaultBufferSize = 2 * 1024 * 1024 // 2MB
+	DefaultBufferNum  = 8               // 默认缓冲区数量
+	AlignSize         = 4 * 1024        // 4KB 对齐
+)
+
 // AsyncResult represents an asynchronous operation result
 type AsyncResult[T any] struct {
 	Result T
@@ -51,8 +58,37 @@ type StorageOps interface {
 	LoadEntriesByParent(parentID EntryID, parentPath string) *AsyncResult[[]fileInfo]
 	LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk]
 
+	// 文件相关的操作
 	FileTruncate(fileID EntryID, size int64) *AsyncResult[error]
 	FileWrite(fileID EntryID, p []byte, offset int64) *AsyncResult[int]
+
+	// 写入到数据块
+	Flush() *AsyncResult[[]BlockID]
+}
+
+// 细化的缓冲区状态
+type bufferState int
+
+const (
+	bufferEmpty bufferState = iota
+	bufferWriting
+	bufferFull
+	bufferFlushing
+)
+
+// WriteBuffer 增加独立的锁和状态管理
+type WriteBuffer struct {
+	data     []byte
+	position int
+	state    bufferState
+	lock     sync.RWMutex    // 缓冲区独立的锁
+	pending  []*PendingChunk // 关联的待写入chunks
+}
+
+// PendingChunk 扩展自 fileChunk
+type PendingChunk struct {
+	fileChunk        // 继承基本字段
+	bufferOffset int // 在缓冲区中的起始位置
 }
 
 type storage struct {
@@ -66,6 +102,11 @@ type storage struct {
 	dirsCache    *lru.Cache // LRU cache for directory information	entryId -> infoList.
 	rootEntry    *fileInfo
 	maxEntryID   EntryID
+
+	// 可能需要调整、重构，暂时先在此处。 仅针对 proto tag 有效。
+	writeBuffers []*WriteBuffer
+	bufferCond   *sync.Cond   // 用于等待可用缓冲区
+	stateLock    sync.RWMutex // 仅用于状态变更
 }
 
 func newStorage(dbName string) (*storage, error) {
@@ -220,7 +261,152 @@ func clean(path string) string {
 	return filepath.Clean(filepath.FromSlash(path))
 }
 
-// ////////////////////////////////////////
+/////////////////////////////////////////////////////////
+
+// 处理 storage 的写入前可交换缓存
+
+// 初始化存储层时初始化缓冲区
+func (s *storage) initBuffer(idx int) *WriteBuffer {
+	//s.writeBuffers = make([]*WriteBuffer, DefaultBufferNum)
+	// 初始化前两个缓冲区
+	//s.writeBuffers[0] = &WriteBuffer{data: make([]byte, DefaultBufferSize)}
+	s.writeBuffers[idx] = &WriteBuffer{data: make([]byte, DefaultBufferSize)}
+	return s.writeBuffers[idx]
+}
+
+// 获取可写入的缓冲区
+func (s *storage) getAvailableBuffer() (*WriteBuffer, int) {
+	s.stateLock.RLock()
+	for i, buf := range s.writeBuffers {
+		if buf == nil {
+			// 延迟到返回前解锁，避免 s.writeBuffers[i] 被多次 alloc.
+			defer s.stateLock.RUnlock()
+			return s.initBuffer(i), i
+		}
+
+		// 快速检查状态
+		buf.lock.RLock()
+		state := buf.state
+		buf.lock.RUnlock()
+
+		if state == bufferEmpty || state == bufferWriting {
+			s.stateLock.RUnlock()
+			return buf, i
+		}
+	}
+	s.stateLock.RUnlock()
+	return nil, -1
+}
+
+// 写入操作
+func (s *storage) fileWriteSync(fileID EntryID, p []byte, offset int64) (int, error) {
+	for {
+		buffer, _ := s.getAvailableBuffer()
+		if buffer == nil {
+			// 等待可用缓冲区
+			s.bufferCond.Wait()
+			continue
+		}
+
+		// 尝试锁定选中的缓冲区
+		buffer.lock.Lock()
+		if buffer.state != bufferEmpty && buffer.state != bufferWriting {
+			// 状态已改变，释放锁并重试
+			buffer.lock.Unlock()
+			continue
+		}
+
+		// 执行写入
+		writeSize := s.writeToBuffer(buffer, fileID, p, offset)
+		buffer.lock.Unlock()
+
+		return writeSize, nil
+	}
+}
+
+// 写入到缓冲区
+func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, p []byte, offset int64) int {
+	// buffer.lock 已在调用方加锁
+
+	remainSpace := DefaultBufferSize - buffer.position
+	writeSize := min(len(p), remainSpace)
+
+	// 写入数据
+	copy(buffer.data[buffer.position:], p[:writeSize])
+
+	// 添加 PendingChunk
+	chunk := &PendingChunk{
+		fileChunk: fileChunk{
+			offset: offset,
+			size:   int64(writeSize),
+		},
+		bufferOffset: buffer.position,
+	}
+	buffer.pending = append(buffer.pending, chunk)
+
+	// 更新状态
+	buffer.position += writeSize
+	buffer.state = bufferWriting
+	if buffer.position >= DefaultBufferSize {
+		buffer.state = bufferFull
+		// 触发异步刷新
+		s.triggerFlush()
+	}
+
+	return writeSize
+}
+
+// 刷新工作器
+func (s *storage) flushWorker() {
+	for range s.flushChan {
+		s.stateLock.RLock()
+		var buffersToFlush []*WriteBuffer
+		for _, buf := range s.writeBuffers {
+			if buf == nil {
+				continue
+			}
+
+			buf.lock.RLock()
+			if buf.state == bufferFull {
+				buffersToFlush = append(buffersToFlush, buf)
+			}
+			buf.lock.RUnlock()
+		}
+		s.stateLock.RUnlock()
+
+		// 处理需要刷新的缓冲区
+		for _, buffer := range buffersToFlush {
+			buffer.lock.Lock()
+			if buffer.state != bufferFull {
+				buffer.lock.Unlock()
+				continue
+			}
+			buffer.state = bufferFlushing
+
+			// 复制需要的数据
+			alignedSize := (buffer.position + AlignSize - 1) & ^(AlignSize - 1)
+			data := make([]byte, alignedSize)
+			copy(data, buffer.data[:buffer.position])
+			pendingChunks := make([]*PendingChunk, len(buffer.pending))
+			copy(pendingChunks, buffer.pending)
+
+			buffer.lock.Unlock()
+
+			// 执行实际的刷新操作
+			if err := s.flushBuffer(data, pendingChunks); err == nil {
+				buffer.lock.Lock()
+				buffer.position = 0
+				buffer.pending = buffer.pending[:0]
+				buffer.state = bufferEmpty
+				buffer.lock.Unlock()
+
+				// 通知等待的写入操作
+				s.bufferCond.Broadcast()
+			}
+		}
+	}
+}
+
 type content struct {
 	name  string
 	bytes []byte
@@ -228,7 +414,7 @@ type content struct {
 	m sync.RWMutex
 }
 
-// ////////////////////////////////////////
+// ///////////////////////////////////////////////////////
 // ErrFileNotFound represents an error when a file is not found in the storage.
 type ErrFileNotFound struct {
 	Path string

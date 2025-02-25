@@ -97,3 +97,4 @@ const (
 )
 
 type EntryID int64
+type BlockID int64
