@@ -87,7 +87,8 @@ type WriteBuffer struct {
 
 // PendingChunk 扩展自 fileChunk
 type PendingChunk struct {
-	fileChunk        // 继承基本字段
+	fileChunk    // 继承基本字段
+	fileID       EntryID
 	bufferOffset int // 在缓冲区中的起始位置
 }
 
@@ -96,8 +97,11 @@ type storage struct {
 	//children map[string]map[string]*file
 
 	/// 新增的与 SQLiteFS 相关的字段
-	mu           sync.Mutex
+	// mu           sync.Mutex
 	conn         *sqlite3.Conn
+	connMutex    sync.RWMutex
+	entriesLock  sync.RWMutex
+	dirsLock     sync.RWMutex
 	entriesCache *lru.Cache // LRU cache for file/directory information, full_path -> entryId.
 	dirsCache    *lru.Cache // LRU cache for directory information	entryId -> infoList.
 	rootEntry    *fileInfo
@@ -105,29 +109,38 @@ type storage struct {
 
 	// 可能需要调整、重构，暂时先在此处。 仅针对 proto tag 有效。
 	writeBuffers []*WriteBuffer
-	bufferCond   *sync.Cond   // 用于等待可用缓冲区
-	stateLock    sync.RWMutex // 仅用于状态变更
+	bufferCond   *sync.Cond    // 用于等待可用缓冲区
+	stateLock    sync.RWMutex  // 仅用于状态变更
+	flushChan    chan struct{} // 触发刷新的通道
 }
 
 func newStorage(dbName string) (*storage, error) {
 	conn, err := sqlite3.Open(dbName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to open database: %v", err)
 	}
 
+	// 初始化数据库表结构
 	if err := InitDatabase(conn); err != nil {
-		return nil, fmt.Errorf("failed to initialize database: %w", err)
+		conn.Close()
+		return nil, fmt.Errorf("failed to initialize database: %v", err)
 	}
 
-	return &storage{
-		// files:        make(map[string]*file, 0),
-		// children:     make(map[string]map[string]*file, 0),
+	s := &storage{
 		conn:         conn,
-		entriesCache: lru.New(500), // Initialize entries cache
-		dirsCache:    lru.New(100), // Initialize directories cache
-		rootEntry:    loadRootEntry(conn),
-		maxEntryID:   loadMaxEntryID(conn),
-	}, nil
+		writeBuffers: make([]*WriteBuffer, DefaultBufferNum),
+		flushChan:    make(chan struct{}, 1),
+		entriesCache: lru.New(1024), // 添加 entries 缓存初始化
+		dirsCache:    lru.New(1024), // 添加 dirs 缓存初始化
+	}
+
+	// 初始化条件变量
+	s.bufferCond = sync.NewCond(&s.stateLock)
+
+	// 启动刷新工作器
+	go s.flushWorker()
+
+	return s, nil
 }
 
 func loadRootEntry(conn *sqlite3.Conn) *fileInfo {
@@ -184,21 +197,21 @@ func loadMaxEntryID(conn *sqlite3.Conn) EntryID {
 		SELECT MAX(entry_id) FROM entries
 	`)
 	if err != nil {
-		return 0 // , fmt.Errorf("prepare statement error: %v", err)
+		return 0
 	}
 	if tail != "" {
 		stmt.Close()
-		return 0 //, fmt.Errorf("unexpected tail in SQL: %s", tail)
+		return 0
 	}
 	defer stmt.Close()
 
 	if !stmt.Step() {
-		return 0 //, fmt.Errorf("no results found: %v", stmt.Err())
+		return 0
 	}
 
 	// Get the max entry_id
 	maxEntryID := EntryID(stmt.ColumnInt64(0))
-	return maxEntryID //, nil
+	return maxEntryID
 }
 
 /////////////////////////////////////////////
@@ -320,16 +333,16 @@ func (s *storage) fileWriteSync(fileID EntryID, p []byte, offset int64) (int, er
 		writeSize := s.writeToBuffer(buffer, fileID, p, offset)
 		buffer.lock.Unlock()
 
-		return writeSize, nil
+		return int(writeSize), nil
 	}
 }
 
 // 写入到缓冲区
-func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, p []byte, offset int64) int {
+func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, p []byte, offset int64) int64 {
 	// buffer.lock 已在调用方加锁
 
-	remainSpace := DefaultBufferSize - buffer.position
-	writeSize := min(len(p), remainSpace)
+	remainSpace := int64(DefaultBufferSize - buffer.position)
+	writeSize := min64(int64(len(p)), remainSpace)
 
 	// 写入数据
 	copy(buffer.data[buffer.position:], p[:writeSize])
@@ -338,14 +351,15 @@ func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, p []byte, o
 	chunk := &PendingChunk{
 		fileChunk: fileChunk{
 			offset: offset,
-			size:   int64(writeSize),
+			size:   writeSize,
 		},
+		fileID:       fileID,
 		bufferOffset: buffer.position,
 	}
 	buffer.pending = append(buffer.pending, chunk)
 
 	// 更新状态
-	buffer.position += writeSize
+	buffer.position += int(writeSize)
 	buffer.state = bufferWriting
 	if buffer.position >= DefaultBufferSize {
 		buffer.state = bufferFull
@@ -407,13 +421,6 @@ func (s *storage) flushWorker() {
 	}
 }
 
-type content struct {
-	name  string
-	bytes []byte
-
-	m sync.RWMutex
-}
-
 // ///////////////////////////////////////////////////////
 // ErrFileNotFound represents an error when a file is not found in the storage.
 type ErrFileNotFound struct {
@@ -422,4 +429,81 @@ type ErrFileNotFound struct {
 
 func (e *ErrFileNotFound) Error() string {
 	return fmt.Sprintf("file not found: %s", e.Path)
+}
+
+// min 返回两个 int64 中的较小值
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// triggerFlush 触发缓冲区刷新
+func (s *storage) triggerFlush() {
+	select {
+	case s.flushChan <- struct{}{}:
+	default:
+	}
+}
+
+// flushBuffer 将数据写入数据库
+func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) error {
+	// 开始事务
+	tx := s.conn.Begin()
+	defer tx.Rollback()
+
+	// 1. 写入 blocks 表
+	stmt, _, err := s.conn.Prepare(`
+		INSERT INTO blocks (data)
+		VALUES (?)
+		RETURNING id
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	var blockID BlockID
+	if err := stmt.BindBlob(1, data); err != nil {
+		return err
+	}
+	if err := stmt.Exec(); err != nil {
+		return err
+	}
+	blockID = BlockID(s.conn.LastInsertRowID())
+
+	// 2. 写入 file_chunks 表
+	stmt, _, err = s.conn.Prepare(`
+		INSERT INTO file_chunks (file_id, offset, size, block_id, block_offset)
+		VALUES (?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, chunk := range chunks {
+		if err := stmt.BindInt64(1, int64(chunk.fileID)); err != nil {
+			return err
+		}
+		if err := stmt.BindInt64(2, chunk.offset); err != nil {
+			return err
+		}
+		if err := stmt.BindInt64(3, chunk.size); err != nil {
+			return err
+		}
+		if err := stmt.BindInt64(4, int64(blockID)); err != nil {
+			return err
+		}
+		if err := stmt.BindInt64(5, int64(chunk.bufferOffset)); err != nil {
+			return err
+		}
+		if err := stmt.Exec(); err != nil {
+			return err
+		}
+		stmt.Reset()
+	}
+
+	return tx.Commit()
 }

@@ -4,7 +4,6 @@ package sqlfs
 
 import (
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -200,6 +199,9 @@ func (s *storage) Get(path string) (*fileInfo, bool) {
 	if err != nil {
 		return nil, false
 	}
+	if entry == nil {
+		return nil, false
+	}
 	return entry, true
 }
 
@@ -355,7 +357,7 @@ func (s *storage) Remove(path string) error {
 }
 
 /////////////////////////////
-
+/*
 func (c *content) WriteAt(p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, &os.PathError{
@@ -404,7 +406,7 @@ func (c *content) ReadAt(b []byte, off int64) (n int, err error) {
 	n = copy(b, c.bytes[off:off+l])
 	return
 }
-
+*/
 func (s *storage) LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk] {
 	result := NewAsyncResult[[]fileChunk]()
 
@@ -461,10 +463,12 @@ func (s *storage) FileWrite(fileID EntryID, p []byte, offset int64) *AsyncResult
 	return result
 }
 
+/*
 func (s *storage) fileWriteSync(fileID EntryID, p []byte, offset int64) (int, error) {
 	// TODO: implement me
 	panic("implement me")
 }
+*/
 
 // LoadEntriesByParent implements StorageOps.LoadEntriesByParent
 func (s *storage) LoadEntriesByParent(parentID EntryID, parentPath string) *AsyncResult[[]fileInfo] {

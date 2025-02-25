@@ -51,6 +51,7 @@ func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy
 	defer fs.mu.Unlock()
 
 	f, has := fs.s.Get(filename)
+	fmt.Printf("OpenFile: %s, flag: %d, perm: %v, has: %v\n", filename, flag, perm, has)
 	if !has {
 		if !isCreate(flag) {
 			return nil, os.ErrNotExist

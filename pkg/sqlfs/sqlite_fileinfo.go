@@ -38,11 +38,3 @@ func (fi *fileInfo) Stat() (os.FileInfo, error) {
 		modTime: fi.modTime,
 	}, nil
 }
-
-func (c *content) Truncate() {
-	c.bytes = make([]byte, 0)
-}
-
-func (c *content) Len() int {
-	return len(c.bytes)
-}
