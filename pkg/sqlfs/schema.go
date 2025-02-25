@@ -62,7 +62,7 @@ func InitDatabase(conn *sqlite3.Conn) error {
 		`INSERT OR IGNORE INTO entries (
 			entry_id, name, parent_id, mode_type, mode_perm, uid, gid, target, create_at, modify_at
 		) VALUES (
-			1, '/', 0, ` + fmt.Sprintf("%d", os.ModeDir) + `, ` + fmt.Sprintf("%d", 0755) + `, 0, 0, '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+			1, '/', 0, ` + fmt.Sprintf("%d", os.ModeDir) + `, ` + fmt.Sprintf("%d", 0755) + `, 0, 0, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 		)`,
 	}
 

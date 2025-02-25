@@ -88,12 +88,15 @@ func (f *file) WriteAt(p []byte, off int64) (int, error) {
 		return 0, errors.New("write not supported")
 	}
 
-	// f.modTime = time.Now()
-	return 0, nil
-	// n, err := f.content.WriteAt(p, off)
-	// f.position = off + int64(n)
+	// 等待异步写入完成
+	result := f.fs.s.FileWrite(f.fileInfo.entryID, p, off)
+	n, err := result.Wait()
+	if err != nil {
+		return 0, err
+	}
 
-	// return n, err
+	f.position = off + int64(n)
+	return n, nil
 }
 
 func (f *file) Close() error {

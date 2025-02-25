@@ -141,14 +141,39 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 		return nil, fmt.Errorf("bind target error: %v", err)
 	}
 
-	if !stmt.Step() {
-		return nil, fmt.Errorf("execute file creation error: %v", stmt.Err())
+	// fmt.Println("create file:", s.maxEntryID, path, name)
+	if err := stmt.Exec(); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit transaction error: %v", err)
 	}
+	/*
+		{
+			stmt, _, err := s.conn.Prepare(`SELECT entry_id, parent_id, name FROM entries Where parent_id = ?`)
+			if err != nil {
+				return nil, fmt.Errorf("query error: %v", err)
+			}
+			defer stmt.Close()
 
+			if err := stmt.BindInt64(1, int64(currentParentID)); err != nil {
+				return nil, fmt.Errorf("bind parent_id error: %v", err)
+			}
+
+			for stmt.Step() {
+				var entryID, parentID int64
+				var name string
+				entryID = stmt.ColumnInt64(0)
+				parentID = stmt.ColumnInt64(1)
+				name = stmt.ColumnText(2)
+				fmt.Println("entry===:", entryID, parentID, name)
+			}
+		}
+	*/
+	// 需要清除 path 对应记录的 parent id 的 cache
+	s.entriesCache.Remove(path)
+	s.dirsCache.Remove(currentParentID)
 	return s.getEntry(path) // 从数据库中再次加载
 }
 
@@ -477,7 +502,6 @@ func (s *storage) LoadEntriesByParent(parentID EntryID, parentPath string) *Asyn
 		result.Complete(cached.([]fileInfo), nil)
 		return result
 	}
-
 	// Load from database if not cached
 	go func() {
 		entries, err := s.loadEntriesByParentSync(parentID, parentPath)

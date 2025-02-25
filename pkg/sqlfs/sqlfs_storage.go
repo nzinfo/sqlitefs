@@ -3,6 +3,7 @@ package sqlfs
 import (
 	"fmt"
 	"io/fs"
+	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -64,6 +65,8 @@ type StorageOps interface {
 
 	// 写入到数据块
 	Flush() *AsyncResult[[]BlockID]
+	// 关闭存储
+	Close() error
 }
 
 // 细化的缓冲区状态
@@ -125,6 +128,11 @@ func newStorage(dbName string) (*storage, error) {
 		conn.Close()
 		return nil, fmt.Errorf("failed to initialize database: %v", err)
 	}
+	maxEntryID, err := loadMaxEntryID(conn)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to load max entry ID: %v", err)
+	}
 
 	s := &storage{
 		conn:         conn,
@@ -132,6 +140,8 @@ func newStorage(dbName string) (*storage, error) {
 		flushChan:    make(chan struct{}, 1),
 		entriesCache: lru.New(1024), // 添加 entries 缓存初始化
 		dirsCache:    lru.New(1024), // 添加 dirs 缓存初始化
+		rootEntry:    loadRootEntry(conn),
+		maxEntryID:   maxEntryID,
 	}
 
 	// 初始化条件变量
@@ -192,26 +202,26 @@ func loadRootEntry(conn *sqlite3.Conn) *fileInfo {
 	return fi
 }
 
-func loadMaxEntryID(conn *sqlite3.Conn) EntryID {
+func loadMaxEntryID(conn *sqlite3.Conn) (EntryID, error) {
 	stmt, tail, err := conn.Prepare(`
 		SELECT MAX(entry_id) FROM entries
 	`)
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	if tail != "" {
 		stmt.Close()
-		return 0
+		return 0, fmt.Errorf("prepare error: %v", tail)
 	}
 	defer stmt.Close()
 
 	if !stmt.Step() {
-		return 0
+		return 0, fmt.Errorf("step error: %v", stmt.Err())
 	}
 
 	// Get the max entry_id
 	maxEntryID := EntryID(stmt.ColumnInt64(0))
-	return maxEntryID
+	return maxEntryID, nil
 }
 
 /////////////////////////////////////////////
@@ -255,7 +265,7 @@ func (s *storage) getEntry(full_path string) (*fileInfo, error) {
 		return nil, err
 	}
 
-	// fmt.Println("getEntry「DONE」:", full_path, dirPath, fileName, parentID, entries)
+	// fmt.Println("getEntry「DONE」:", full_path, dirPath, fileName, parentID, len(entries))
 	// Check for the file in the loaded entries
 	for _, entry := range entries {
 		if entry.name == fileName {
@@ -370,55 +380,106 @@ func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, p []byte, o
 	return writeSize
 }
 
-// 刷新工作器
+// flushWorker 在后台运行，处理缓冲区刷新
 func (s *storage) flushWorker() {
 	for range s.flushChan {
 		s.stateLock.RLock()
 		var buffersToFlush []*WriteBuffer
-		for _, buf := range s.writeBuffers {
-			if buf == nil {
-				continue
+		for _, buffer := range s.writeBuffers {
+			buffer.lock.RLock()
+			if buffer.state == bufferWriting && len(buffer.pending) > 0 {
+				buffersToFlush = append(buffersToFlush, buffer)
 			}
-
-			buf.lock.RLock()
-			if buf.state == bufferFull {
-				buffersToFlush = append(buffersToFlush, buf)
-			}
-			buf.lock.RUnlock()
+			buffer.lock.RUnlock()
 		}
 		s.stateLock.RUnlock()
 
-		// 处理需要刷新的缓冲区
 		for _, buffer := range buffersToFlush {
 			buffer.lock.Lock()
-			if buffer.state != bufferFull {
+			if buffer.state != bufferWriting || len(buffer.pending) == 0 {
 				buffer.lock.Unlock()
 				continue
 			}
-			buffer.state = bufferFlushing
 
-			// 复制需要的数据
-			alignedSize := (buffer.position + AlignSize - 1) & ^(AlignSize - 1)
-			data := make([]byte, alignedSize)
+			// 复制数据以便解锁
+			data := make([]byte, buffer.position)
 			copy(data, buffer.data[:buffer.position])
 			pendingChunks := make([]*PendingChunk, len(buffer.pending))
 			copy(pendingChunks, buffer.pending)
-
 			buffer.lock.Unlock()
 
 			// 执行实际的刷新操作
-			if err := s.flushBuffer(data, pendingChunks); err == nil {
+			_, err := s.flushBuffer(data, pendingChunks)
+			if err == nil {
 				buffer.lock.Lock()
 				buffer.position = 0
 				buffer.pending = buffer.pending[:0]
 				buffer.state = bufferEmpty
 				buffer.lock.Unlock()
-
-				// 通知等待的写入操作
-				s.bufferCond.Broadcast()
+			} else {
+				log.Printf("Error flushing buffer: %v", err)
 			}
 		}
 	}
+}
+
+// Flush 将所有缓冲区的数据刷新到数据库
+func (s *storage) Flush() *AsyncResult[[]BlockID] {
+	result := NewAsyncResult[[]BlockID]()
+
+	go func() {
+		// 获取所有需要刷新的缓冲区
+		var buffersToFlush []*WriteBuffer
+		s.stateLock.RLock()
+		for _, buffer := range s.writeBuffers {
+			buffer.lock.RLock()
+			if buffer.state == bufferWriting && len(buffer.pending) > 0 {
+				buffersToFlush = append(buffersToFlush, buffer)
+			}
+			buffer.lock.RUnlock()
+		}
+		s.stateLock.RUnlock()
+
+		// 刷新所有缓冲区
+		var blockIDs []BlockID
+		var flushErr error
+		for _, buffer := range buffersToFlush {
+			buffer.lock.Lock()
+			if len(buffer.pending) > 0 {
+				ids, err := s.flushBuffer(buffer.data[:buffer.position], buffer.pending)
+				if err != nil {
+					flushErr = fmt.Errorf("flush buffer error: %v", err)
+					buffer.lock.Unlock()
+					break
+				}
+				blockIDs = append(blockIDs, ids...)
+				// 重置缓冲区
+				buffer.position = 0
+				buffer.pending = nil
+				buffer.state = bufferEmpty
+			}
+			buffer.lock.Unlock()
+		}
+
+		result.Complete(blockIDs, flushErr)
+	}()
+
+	return result
+}
+
+// Close 关闭存储，包括数据库连接
+func (s *storage) Close() error {
+	s.connMutex.Lock()
+	defer s.connMutex.Unlock()
+
+	if s.conn != nil {
+		if err := s.conn.Close(); err != nil {
+			return fmt.Errorf("failed to close database connection: %v", err)
+		}
+		s.conn = nil
+	}
+
+	return nil
 }
 
 // ///////////////////////////////////////////////////////
@@ -448,8 +509,7 @@ func (s *storage) triggerFlush() {
 }
 
 // flushBuffer 将数据写入数据库
-func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) error {
-	// 开始事务
+func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) ([]BlockID, error) {
 	tx := s.conn.Begin()
 	defer tx.Rollback()
 
@@ -460,16 +520,16 @@ func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) error {
 		RETURNING id
 	`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer stmt.Close()
 
 	var blockID BlockID
 	if err := stmt.BindBlob(1, data); err != nil {
-		return err
+		return nil, err
 	}
 	if err := stmt.Exec(); err != nil {
-		return err
+		return nil, err
 	}
 	blockID = BlockID(s.conn.LastInsertRowID())
 
@@ -479,31 +539,35 @@ func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) error {
 		VALUES (?, ?, ?, ?, ?)
 	`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer stmt.Close()
 
 	for _, chunk := range chunks {
 		if err := stmt.BindInt64(1, int64(chunk.fileID)); err != nil {
-			return err
+			return nil, err
 		}
 		if err := stmt.BindInt64(2, chunk.offset); err != nil {
-			return err
+			return nil, err
 		}
-		if err := stmt.BindInt64(3, chunk.size); err != nil {
-			return err
+		if err := stmt.BindInt64(3, int64(chunk.size)); err != nil {
+			return nil, err
 		}
 		if err := stmt.BindInt64(4, int64(blockID)); err != nil {
-			return err
+			return nil, err
 		}
 		if err := stmt.BindInt64(5, int64(chunk.bufferOffset)); err != nil {
-			return err
+			return nil, err
 		}
 		if err := stmt.Exec(); err != nil {
-			return err
+			return nil, err
 		}
 		stmt.Reset()
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return []BlockID{blockID}, nil
 }

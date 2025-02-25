@@ -32,9 +32,11 @@ func NewSQLiteFS(dbName string) (billy.Filesystem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	fs := &SQLiteFS{s: s}
+	fs := &SQLiteFS{
+		s:         s,
+		openFiles: make(map[EntryID]*file),
+	}
 
-	// fs.openFiles = make(map[*file]bool)
 	return chroot.New(fs, string(separator)), nil
 }
 
@@ -90,21 +92,31 @@ func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy
 func (fs *SQLiteFS) closeFile(fi *fileInfo) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	// delete(fs.openFiles, f)
+	delete(fs.openFiles, fi.entryID)
 }
 
 func (fs *SQLiteFS) Close() error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	/*
-		for f := range fs.openFiles {
-			if err := f.Close(); err != nil {
-				log.Printf("Error closing file: %v", err)
-			}
-			delete(fs.openFiles, f)
+	// 关闭所有打开的文件
+	for entryID, f := range fs.openFiles {
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("failed to close file: %v", err)
 		}
-	*/
+		delete(fs.openFiles, entryID)
+	}
+
+	// 等待刷新完成
+	result := fs.s.Flush()
+	if _, err := result.Wait(); err != nil {
+		return fmt.Errorf("failed to flush storage: %v", err)
+	}
+	// 关闭数据库连接
+	if err := fs.s.Close(); err != nil {
+		return fmt.Errorf("failed to close storage: %v", err)
+	}
+
 	return nil
 }
 
