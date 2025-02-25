@@ -37,6 +37,11 @@ func (ar *AsyncResult[T]) Complete(result T, err error) {
 	close(ar.Done)
 }
 
+type WriteResult struct {
+	BytesWritten int64
+	Err          error
+}
+
 // StorageOps defines the interface for storage operations
 type StorageOps interface {
 	// LoadEntry loads a single entry by its ID asynchronously
@@ -47,6 +52,7 @@ type StorageOps interface {
 	LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk]
 
 	FileTruncate(fileID EntryID, size int64) *AsyncResult[error]
+	FileWrite(fileID EntryID, p []byte, offset int64) *AsyncResult[int]
 }
 
 type storage struct {

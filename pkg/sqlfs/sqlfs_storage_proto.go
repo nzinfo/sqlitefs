@@ -469,6 +469,20 @@ func (s *storage) loadFileChunksSync(fileID EntryID) ([]fileChunk, error) {
 	return chunks, nil
 }
 
+func (s *storage) FileWrite(fileID EntryID, p []byte, offset int64) *AsyncResult[int] {
+	result := NewAsyncResult[int]()
+	go func() {
+		bytesWritten, err := s.fileWriteSync(fileID, p, offset)
+		result.Complete(bytesWritten, err)
+	}()
+	return result
+}
+
+func (s *storage) fileWriteSync(fileID EntryID, p []byte, offset int64) (int, error) {
+	// TODO: implement me
+	panic("implement me")
+}
+
 // LoadEntriesByParent implements StorageOps.LoadEntriesByParent
 func (s *storage) LoadEntriesByParent(parentID EntryID, parentPath string) *AsyncResult[[]fileInfo] {
 	result := NewAsyncResult[[]fileInfo]()
