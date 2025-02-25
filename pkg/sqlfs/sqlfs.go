@@ -34,10 +34,7 @@ func NewSQLiteFS(dbName string) (billy.Filesystem, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	fs := &SQLiteFS{s: s}
-	if _, err := fs.s.New("/", 0755|os.ModeDir, 0); err != nil {
-		log.Printf("failed to create root dir: %v", err)
-		return nil, err
-	}
+
 	fs.openFiles = make(map[*file]bool)
 	return chroot.New(fs, string(separator)), nil
 }
@@ -261,7 +258,7 @@ type fileInfo struct {
 	entryID  int64       // Primary key from entries table
 	parentID int64       // Parent directory ID (0 for root)
 	name     string      // File/directory name
-	fileType FileType    // Type: 'file', 'dir', or 'symlink'
+	fullPath string      // Full path of the file/directory
 	mode     os.FileMode // File mode/permissions
 	uid      int         // User ID
 	gid      int         // Group ID

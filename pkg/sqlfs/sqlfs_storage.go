@@ -123,14 +123,21 @@ func (s *storage) getEntry(full_path string) (*fileInfo, error) {
 		return cached.(*fileInfo), nil
 	}
 
+	// Handle root directory specially
+	if full_path == "/" {
+		return &fileInfo{name: "/", entryID: 1}, nil
+	}
+
 	// Split into directory and file name
 	dirPath := filepath.Dir(full_path)
 	fileName := filepath.Base(full_path)
 
-	var parentID int64
+	fmt.Println("getEntry:", full_path, dirPath, fileName)
 
-	// If there's a directory part, get its entry
-	if dirPath != "/" {
+	var parentID int64
+	if dirPath == "/" {
+		parentID = 1 // root directory
+	} else {
 		parentDirInfo, err := s.getEntry(dirPath)
 		if err != nil {
 			return nil, err
@@ -145,6 +152,7 @@ func (s *storage) getEntry(full_path string) (*fileInfo, error) {
 		return nil, err
 	}
 
+	fmt.Println("getEntry「DONE」:", full_path, dirPath, fileName, parentID, entries)
 	// Check for the file in the loaded entries
 	for _, entry := range entries {
 		if entry.name == fileName {

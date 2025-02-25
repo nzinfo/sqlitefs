@@ -13,7 +13,7 @@ func TestFilePathDirAndBase(t *testing.T) {
 	}{
 		{"/home", "/", "home"},
 		{"/", "/", "/"},
-		{filepath.FromSlash("c:/"), filepath.FromSlash("c:"), filepath.FromSlash("c:")},
+		{filepath.FromSlash("c:/"), filepath.FromSlash("."), filepath.FromSlash("c:")},
 		{filepath.FromSlash("c:/home"), filepath.FromSlash("c:"), "home"},
 		{"/home/user", "/home", "user"},
 		{"/home/user/", "/home", "user"},
