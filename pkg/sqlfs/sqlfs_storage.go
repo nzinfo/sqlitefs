@@ -130,7 +130,7 @@ func (s *storage) getEntry(full_path string) (*fileInfo, error) {
 	var parentID int64
 
 	// If there's a directory part, get its entry
-	if dirPath != "" {
+	if dirPath != "/" {
 		parentDirInfo, err := s.getEntry(dirPath)
 		if err != nil {
 			return nil, err

@@ -34,9 +34,10 @@ func (f *file) ReadAt(b []byte, off int64) (int, error) {
 		return 0, errors.New("read not supported")
 	}
 
-	n, err := f.content.ReadAt(b, off)
+	return 0, nil
+	//n, err := f.content.ReadAt(b, off)
 
-	return n, err
+	//return n, err
 }
 
 func (f *file) Seek(offset int64, whence int) (int64, error) {
@@ -70,10 +71,11 @@ func (f *file) WriteAt(p []byte, off int64) (int, error) {
 	}
 
 	f.modTime = time.Now()
-	n, err := f.content.WriteAt(p, off)
-	f.position = off + int64(n)
+	return 0, nil
+	// n, err := f.content.WriteAt(p, off)
+	// f.position = off + int64(n)
 
-	return n, err
+	// return n, err
 }
 
 func (f *file) Close() error {

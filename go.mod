@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/agiledragon/gomonkey/v2 v2.13.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.4.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/golang/mock v1.6.0 // indirect
