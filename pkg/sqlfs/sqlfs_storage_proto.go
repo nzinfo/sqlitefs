@@ -10,6 +10,8 @@ import (
 	"path"
 	"path/filepath"
 	"time"
+
+	"github.com/ncruces/go-sqlite3"
 )
 
 func (s *storage) Has(path string) bool {
@@ -420,6 +422,53 @@ func (c *content) ReadAt(b []byte, off int64) (n int, err error) {
 	return
 }
 
+func (s *storage) LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk] {
+	result := NewAsyncResult[[]fileChunk]()
+
+	// Start a goroutine to load chunks asynchronously
+	go func() {
+		chunks, err := s.loadFileChunksSync(fileID)
+		result.Complete(chunks, err)
+	}()
+
+	return result
+}
+
+func (s *storage) loadFileChunksSync(fileID EntryID) ([]fileChunk, error) {
+	stmt, _, err := s.conn.Prepare(`
+		SELECT row_id, offset, size, block_id, block_offset
+		FROM file_chunks
+		WHERE file_id = ?
+		ORDER BY row_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("prepare select chunks statement error: %v", err)
+	}
+	defer stmt.Close()
+
+	if err := stmt.BindInt64(1, int64(fileID)); err != nil {
+		return nil, fmt.Errorf("bind file_id error: %v", err)
+	}
+
+	var chunks []fileChunk
+	for stmt.Step() {
+		chunk := fileChunk{
+			rowID:       stmt.ColumnInt64(0),
+			offset:      stmt.ColumnInt64(1),
+			size:        stmt.ColumnInt64(2),
+			blockID:     stmt.ColumnInt64(3),
+			blockOffset: stmt.ColumnInt64(4),
+		}
+		chunks = append(chunks, chunk)
+	}
+
+	if err := stmt.Err(); err != nil {
+		return nil, fmt.Errorf("execute select chunks error: %v", err)
+	}
+
+	return chunks, nil
+}
+
 // LoadEntriesByParent implements StorageOps.LoadEntriesByParent
 func (s *storage) LoadEntriesByParent(parentID EntryID, parentPath string) *AsyncResult[[]fileInfo] {
 	result := NewAsyncResult[[]fileInfo]()
@@ -441,7 +490,127 @@ func (s *storage) LoadEntriesByParent(parentID EntryID, parentPath string) *Asyn
 	return result
 }
 
-// loadEntriesByParent loads all entries in a directory by parent_id
+func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
+	result := NewAsyncResult[error]()
+
+	go func() {
+		tx := s.conn.Begin()
+		defer tx.Rollback()
+
+		if size == 0 {
+			// 特殊处理：删除所有chunks
+			err := s.deleteAllChunksInTx(s.conn, fileID)
+			if err != nil {
+				result.Complete(nil, err)
+				return
+			}
+		} else {
+			// 1. 删除完全在截断点后的chunks
+			stmt, _, err := s.conn.Prepare(`
+				DELETE FROM file_chunks 
+				WHERE file_id = ? AND offset >= ?
+			`)
+			if err != nil {
+				result.Complete(nil, fmt.Errorf("prepare delete statement error: %v", err))
+				return
+			}
+			defer stmt.Close()
+
+			if err := stmt.BindInt64(1, int64(fileID)); err != nil {
+				result.Complete(nil, fmt.Errorf("bind file_id error: %v", err))
+				return
+			}
+			if err := stmt.BindInt64(2, size); err != nil {
+				result.Complete(nil, fmt.Errorf("bind size error: %v", err))
+				return
+			}
+
+			if err := stmt.Exec(); err != nil {
+				result.Complete(nil, fmt.Errorf("execute delete error: %v", err))
+				return
+			}
+
+			// 2. 更新跨越截断点的chunks
+			stmt, _, err = s.conn.Prepare(`
+				UPDATE file_chunks 
+				SET size = ? - offset
+				WHERE file_id = ? 
+				AND offset < ?
+				AND offset + size > ?
+			`)
+			if err != nil {
+				result.Complete(nil, fmt.Errorf("prepare update statement error: %v", err))
+				return
+			}
+			defer stmt.Close()
+
+			if err := stmt.BindInt64(1, size); err != nil {
+				result.Complete(nil, fmt.Errorf("bind size(1) error: %v", err))
+				return
+			}
+			if err := stmt.BindInt64(2, int64(fileID)); err != nil {
+				result.Complete(nil, fmt.Errorf("bind file_id error: %v", err))
+				return
+			}
+			if err := stmt.BindInt64(3, size); err != nil {
+				result.Complete(nil, fmt.Errorf("bind size(2) error: %v", err))
+				return
+			}
+			if err := stmt.BindInt64(4, size); err != nil {
+				result.Complete(nil, fmt.Errorf("bind size(3) error: %v", err))
+				return
+			}
+
+			if err := stmt.Exec(); err != nil {
+				result.Complete(nil, fmt.Errorf("execute update error: %v", err))
+				return
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			result.Complete(nil, fmt.Errorf("commit transaction error: %v", err))
+			return
+		}
+
+		result.Complete(nil, nil)
+	}()
+
+	return result
+}
+
+func (s *storage) deleteAllChunks(fileID EntryID) error {
+	tx := s.conn.Begin()
+	defer tx.Rollback()
+
+	err := s.deleteAllChunksInTx(s.conn, fileID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (s *storage) deleteAllChunksInTx(tx *sqlite3.Conn, fileID EntryID) error {
+	stmt, _, err := tx.Prepare(`
+		DELETE FROM file_chunks 
+		WHERE file_id = ?
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare delete all chunks statement error: %v", err)
+	}
+	defer stmt.Close()
+
+	if err := stmt.BindInt64(1, int64(fileID)); err != nil {
+		return fmt.Errorf("bind file_id error: %v", err)
+	}
+
+	if err := stmt.Exec(); err != nil {
+		return fmt.Errorf("execute delete all chunks error: %v", err)
+	}
+
+	return nil
+}
+
 func (s *storage) loadEntriesByParentSync(parentID EntryID, parentPath string) ([]fileInfo, error) {
 	stmt, tail, err := s.conn.Prepare(`
 		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at

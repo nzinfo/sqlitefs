@@ -5,7 +5,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"time"
 
 	"github.com/go-git/go-billy/v6"
 )
@@ -17,6 +16,7 @@ type file struct {
 	flag     int
 	mode     os.FileMode
 	position int64
+	content  fileContent
 }
 
 func OpenFile(fs *SQLiteFS, fileInfo *fileInfo, flag int, perm os.FileMode) (*file, error) {
@@ -88,7 +88,7 @@ func (f *file) WriteAt(p []byte, off int64) (int, error) {
 		return 0, errors.New("write not supported")
 	}
 
-	f.modTime = time.Now()
+	// f.modTime = time.Now()
 	return 0, nil
 	// n, err := f.content.WriteAt(p, off)
 	// f.position = off + int64(n)
@@ -107,27 +107,22 @@ func (f *file) Close() error {
 }
 
 func (f *file) Truncate(size int64) error {
-	if size < int64(len(f.content.bytes)) {
-		f.content.bytes = f.content.bytes[:size]
-	} else if more := int(size) - len(f.content.bytes); more > 0 {
-		f.content.bytes = append(f.content.bytes, make([]byte, more)...)
-	}
-
-	return nil
+	return f.content.Truncate(f.fs, f.fileInfo.entryID, size)
 }
 
 func (f *file) Duplicate(filename string, mode fs.FileMode, flag int) billy.File {
+	// 暂时不处理 filename
 	nf := &file{
-		name:    filename,
-		content: f.content,
-		mode:    mode,
-		flag:    flag,
-		modTime: f.modTime,
-		fs:      f.fs,
+		fs:       f.fs,
+		fileInfo: f.fileInfo,
+		flag:     flag,
+		mode:     mode,
+		position: f.position,
+		content:  f.content,
 	}
 
 	if isTruncate(flag) {
-		nf.content.Truncate()
+		nf.content.Truncate(nf.fs, f.fileInfo.entryID, 0)
 	}
 
 	if isAppend(flag) {

@@ -9,6 +9,19 @@ func (s *storage) LoadEntriesByParent(parentID EntryID, parentPath string) *Asyn
 	return result
 }
 
+func (s *storage) LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk] {
+	result := NewAsyncResult[[]fileChunk]()
+	return result
+}
+
+func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
+	return nil
+}
+
+func (s *storage) FileTruncateEx(fileID EntryID, size int64, lastChunk *fileChunk) *AsyncResult[error] {
+	return nil
+}
+
 func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error) {
 	return nil, nil
 }

@@ -44,6 +44,9 @@ type StorageOps interface {
 
 	// LoadEntriesByParent loads all entries in a directory by parent_id asynchronously
 	LoadEntriesByParent(parentID EntryID, parentPath string) *AsyncResult[[]fileInfo]
+	LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk]
+
+	FileTruncate(fileID EntryID, size int64) *AsyncResult[error]
 }
 
 type storage struct {
