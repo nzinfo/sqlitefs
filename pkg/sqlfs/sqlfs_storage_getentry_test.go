@@ -16,7 +16,7 @@ func TestGetEntry_Root(t *testing.T) {
 
 	// Patch LoadEntriesByParent to return a predefined entry for root
 	patches := gomonkey.ApplyFunc((*storage).LoadEntriesByParent,
-		func(_ *storage, parentID int64) *AsyncResult[[]fileInfo] {
+		func(_ *storage, parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
 			rs := NewAsyncResult[[]fileInfo]()
 			rs.Complete([]fileInfo{
 				{name: "file.txt", entryID: 2},
@@ -39,20 +39,20 @@ func TestGetEntry_Success(t *testing.T) {
 
 	// Patch LoadEntriesByParent to return the correct structure
 	patches := gomonkey.ApplyFunc((*storage).LoadEntriesByParent,
-		func(_ *storage, parentID int64) *AsyncResult[[]fileInfo] {
+		func(_ *storage, parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
 			var entries []fileInfo
 			switch parentID {
 			case 1: // Root directory
 				entries = []fileInfo{
-					{name: "path", entryID: 2, mode: os.ModeDir},
+					{name: "path", entryID: 2, mode: os.ModeDir, fullPath: "/path"},
 				}
 			case 2: // path directory
 				entries = []fileInfo{
-					{name: "to", entryID: 3, mode: os.ModeDir},
+					{name: "to", entryID: 3, mode: os.ModeDir, fullPath: "/path/to"},
 				}
 			case 3: // to directory
 				entries = []fileInfo{
-					{name: "file.txt", entryID: 4, mode: 0}, // 0 表示文件模式
+					{name: "file.txt", entryID: 4, mode: 0, fullPath: "/path/to/file.txt"}, // 0 表示文件模式
 				}
 			default:
 				entries = []fileInfo{}
@@ -68,6 +68,7 @@ func TestGetEntry_Success(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, entry)
 	assert.Equal(t, "file.txt", entry.name)
+	assert.Equal(t, "/path/to/file.txt", entry.fullPath) // 检查 fullPath
 }
 
 func TestGetEntry_NotFound(t *testing.T) {
@@ -77,7 +78,7 @@ func TestGetEntry_NotFound(t *testing.T) {
 	}
 
 	patches := gomonkey.ApplyFunc((*storage).LoadEntriesByParent,
-		func(_ *storage, parentID int64) *AsyncResult[[]fileInfo] {
+		func(_ *storage, parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
 			rs := NewAsyncResult[[]fileInfo]()
 			rs.Complete(nil, &ErrFileNotFound{Path: "/path/to/nonexistent.txt"})
 			return rs

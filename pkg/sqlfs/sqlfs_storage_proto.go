@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -210,7 +211,7 @@ func (c *content) ReadAt(b []byte, off int64) (n int, err error) {
 }
 
 /////////////////////////////
-
+/*
 // LoadEntry implements StorageOps.LoadEntry
 func (s *storage) LoadEntry(entryID int64) *AsyncResult[*fileInfo] {
 	result := NewAsyncResult[*fileInfo]()
@@ -226,9 +227,10 @@ func (s *storage) LoadEntry(entryID int64) *AsyncResult[*fileInfo] {
 	}()
 	return result
 }
+*/
 
 // LoadEntriesByParent implements StorageOps.LoadEntriesByParent
-func (s *storage) LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo] {
+func (s *storage) LoadEntriesByParent(parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
 	result := NewAsyncResult[[]fileInfo]()
 	if cached, ok := s.dirsCache.Get(parentID); ok {
 		result.Complete(cached.([]fileInfo), nil)
@@ -237,7 +239,7 @@ func (s *storage) LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo] {
 
 	// Load from database if not cached
 	go func() {
-		entries, err := s.loadEntriesByParentSync(parentID)
+		entries, err := s.loadEntriesByParentSync(parentID, parentPath)
 		if err != nil {
 			result.Complete(nil, err)
 			return
@@ -248,6 +250,7 @@ func (s *storage) LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo] {
 	return result
 }
 
+/*
 // loadEntry loads a single entry by its ID
 func (s *storage) loadEntrySync(entryID int64) (*fileInfo, error) {
 	stmt, tail, err := s.conn.Prepare(`
@@ -287,6 +290,7 @@ func (s *storage) loadEntrySync(entryID int64) (*fileInfo, error) {
 		entryID:  stmt.ColumnInt64(0),
 		parentID: stmt.ColumnInt64(1),
 		name:     stmt.ColumnText(2),
+		fullPath: path.Join(parentPath, stmt.ColumnText(2)), // FIXME: 使用文件系統自身提供的 Join.
 		mode:     mode,
 		uid:      int(stmt.ColumnInt64(5)),
 		gid:      int(stmt.ColumnInt64(6)),
@@ -297,9 +301,10 @@ func (s *storage) loadEntrySync(entryID int64) (*fileInfo, error) {
 
 	return fi, nil
 }
+*/
 
 // loadEntriesByParent loads all entries in a directory by parent_id
-func (s *storage) loadEntriesByParentSync(parentID int64) ([]fileInfo, error) {
+func (s *storage) loadEntriesByParentSync(parentID int64, parentPath string) ([]fileInfo, error) {
 	stmt, tail, err := s.conn.Prepare(`
 		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
 		FROM entries
@@ -336,6 +341,7 @@ func (s *storage) loadEntriesByParentSync(parentID int64) ([]fileInfo, error) {
 			entryID:  stmt.ColumnInt64(0),
 			parentID: stmt.ColumnInt64(1),
 			name:     stmt.ColumnText(2),
+			fullPath: path.Join(parentPath, stmt.ColumnText(2)),
 			mode:     mode,
 			uid:      int(stmt.ColumnInt64(5)),
 			gid:      int(stmt.ColumnInt64(6)),

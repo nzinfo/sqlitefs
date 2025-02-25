@@ -87,67 +87,6 @@ func setupTestStorage(t *testing.T) *storage {
 	return s
 }
 
-func TestLoadEntry(t *testing.T) {
-	s := setupTestStorage(t)
-
-	tests := []struct {
-		name        string
-		entryID     int64
-		wantErr     bool
-		checkResult func(*testing.T, *fileInfo)
-	}{
-		{
-			name:    "root directory",
-			entryID: 1,
-			checkResult: func(t *testing.T, fi *fileInfo) {
-				assert.Equal(t, "/", fi.name)
-				assert.Equal(t, fs.FileMode(os.ModeDir|0755), fi.mode)
-				assert.Equal(t, int64(0), fi.parentID)
-			},
-		},
-		{
-			name:    "regular file",
-			entryID: 3,
-			checkResult: func(t *testing.T, fi *fileInfo) {
-				assert.Equal(t, "test.txt", fi.name)
-				assert.Equal(t, fs.FileMode(0644), fi.mode)
-				assert.Equal(t, int64(1), fi.parentID)
-			},
-		},
-		{
-			name:    "symlink",
-			entryID: 5,
-			checkResult: func(t *testing.T, fi *fileInfo) {
-				assert.Equal(t, "link.txt", fi.name)
-				assert.Equal(t, os.ModeSymlink|0777, fi.mode)
-				assert.Equal(t, "test.txt", fi.target)
-			},
-		},
-		{
-			name:    "non-existent entry",
-			entryID: 999,
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := s.LoadEntry(tt.entryID)
-			<-result.Done
-
-			if tt.wantErr {
-				assert.Error(t, result.Err)
-				assert.Nil(t, result.Result)
-				return
-			}
-
-			require.NoError(t, result.Err)
-			require.NotNil(t, result.Result)
-			tt.checkResult(t, result.Result)
-		})
-	}
-}
-
 func TestLoadEntriesByParent(t *testing.T) {
 	s := setupTestStorage(t)
 
@@ -194,7 +133,7 @@ func TestLoadEntriesByParent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := s.LoadEntriesByParent(tt.parentID)
+			result := s.LoadEntriesByParent(tt.parentID, "")
 			<-result.Done
 
 			require.NoError(t, result.Err)

@@ -40,10 +40,10 @@ func (ar *AsyncResult[T]) Complete(result T, err error) {
 // StorageOps defines the interface for storage operations
 type StorageOps interface {
 	// LoadEntry loads a single entry by its ID asynchronously
-	LoadEntry(entryID int64) *AsyncResult[*fileInfo]
+	// LoadEntry(entryID int64) *AsyncResult[*fileInfo]
 
 	// LoadEntriesByParent loads all entries in a directory by parent_id asynchronously
-	LoadEntriesByParent(parentID int64) *AsyncResult[[]fileInfo]
+	LoadEntriesByParent(parentID int64, parentPath string) *AsyncResult[[]fileInfo]
 }
 
 type storage struct {
@@ -132,7 +132,7 @@ func (s *storage) getEntry(full_path string) (*fileInfo, error) {
 	dirPath := filepath.Dir(full_path)
 	fileName := filepath.Base(full_path)
 
-	fmt.Println("getEntry:", full_path, dirPath, fileName)
+	// fmt.Println("getEntry:", full_path, dirPath, fileName)
 
 	var parentID int64
 	if dirPath == "/" {
@@ -146,13 +146,13 @@ func (s *storage) getEntry(full_path string) (*fileInfo, error) {
 	}
 
 	// Load entries in the parent directory
-	entriesResult := s.LoadEntriesByParent(parentID)
+	entriesResult := s.LoadEntriesByParent(parentID, dirPath)
 	entries, err := entriesResult.Wait()
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Println("getEntry「DONE」:", full_path, dirPath, fileName, parentID, entries)
+	// fmt.Println("getEntry「DONE」:", full_path, dirPath, fileName, parentID, entries)
 	// Check for the file in the loaded entries
 	for _, entry := range entries {
 		if entry.name == fileName {
