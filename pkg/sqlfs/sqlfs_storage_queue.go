@@ -18,11 +18,11 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*file, error) {
 	return nil, nil
 }
 
-func (s *storage) Get(path string) (*file, bool) {
+func (s *storage) Get(path string) (*fileInfo, bool) {
 	return nil, false
 }
 
-func (s *storage) Children(path string) []*file {
+func (s *storage) Children(path string) *[]fileInfo {
 	return nil
 }
 

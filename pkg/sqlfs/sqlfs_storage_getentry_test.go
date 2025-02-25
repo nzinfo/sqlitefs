@@ -157,4 +157,29 @@ func TestGetEntry_WithDatabase(t *testing.T) {
 	assert.NotNil(t, entry)
 	assert.Equal(t, "/", entry.fullPath)
 	assert.Equal(t, os.ModeDir, os.ModeDir&entry.mode)
+
+	// 获取不存在的文件
+	{
+		entry, err = s.getEntry("/path/to/nonexistent.txt")
+		assert.Error(t, err)
+		var notFoundErr *ErrFileNotFound
+		assert.ErrorAs(t, err, &notFoundErr)
+		assert.Nil(t, entry)
+	}
+
+	// 获取目录
+	entry, err = s.getEntry("/path/to")
+	assert.NoError(t, err)
+	assert.NotNil(t, entry)
+	assert.Equal(t, "to", entry.name)
+	assert.Equal(t, "/path/to", entry.fullPath)
+
+	// 获取不存在的目录
+	{
+		entry, err = s.getEntry("/path/to/nonexistent")
+		assert.Error(t, err)
+		var notFoundErr *ErrFileNotFound
+		assert.ErrorAs(t, err, &notFoundErr)
+		assert.Nil(t, entry)
+	}
 }

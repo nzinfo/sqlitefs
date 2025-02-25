@@ -48,8 +48,8 @@ type StorageOps interface {
 }
 
 type storage struct {
-	files    map[string]*file
-	children map[string]map[string]*file
+	//files    map[string]*file
+	//children map[string]map[string]*file
 
 	/// 新增的与 SQLiteFS 相关的字段
 	mu           sync.Mutex
@@ -57,6 +57,7 @@ type storage struct {
 	entriesCache *lru.Cache // LRU cache for file/directory information, full_path -> entryId.
 	dirsCache    *lru.Cache // LRU cache for directory information	entryId -> infoList.
 	rootEntry    *fileInfo
+	maxEntryID   int64
 }
 
 func newStorage(dbName string) (*storage, error) {
@@ -70,12 +71,13 @@ func newStorage(dbName string) (*storage, error) {
 	}
 
 	return &storage{
-		files:        make(map[string]*file, 0),
-		children:     make(map[string]map[string]*file, 0),
+		// files:        make(map[string]*file, 0),
+		// children:     make(map[string]map[string]*file, 0),
 		conn:         conn,
 		entriesCache: lru.New(500), // Initialize entries cache
 		dirsCache:    lru.New(100), // Initialize directories cache
 		rootEntry:    loadRootEntry(conn),
+		maxEntryID:   loadMaxEntryID(conn),
 	}, nil
 }
 
@@ -128,42 +130,29 @@ func loadRootEntry(conn *sqlite3.Conn) *fileInfo {
 	return fi
 }
 
+func loadMaxEntryID(conn *sqlite3.Conn) int64 {
+	stmt, tail, err := conn.Prepare(`
+		SELECT MAX(entry_id) FROM entries
+	`)
+	if err != nil {
+		return 0 // , fmt.Errorf("prepare statement error: %v", err)
+	}
+	if tail != "" {
+		stmt.Close()
+		return 0 //, fmt.Errorf("unexpected tail in SQL: %s", tail)
+	}
+	defer stmt.Close()
+
+	if !stmt.Step() {
+		return 0 //, fmt.Errorf("no results found: %v", stmt.Err())
+	}
+
+	// Get the max entry_id
+	maxEntryID := stmt.ColumnInt64(0)
+	return maxEntryID //, nil
+}
+
 /////////////////////////////////////////////
-
-func clean(path string) string {
-	return filepath.Clean(filepath.FromSlash(path))
-}
-
-// ////////////////////////////////////////
-type content struct {
-	name  string
-	bytes []byte
-
-	m sync.RWMutex
-}
-
-//////////////////////////////////////////
-
-type file struct {
-	name     string
-	content  *content
-	position int64
-	flag     int
-	mode     os.FileMode
-	modTime  time.Time
-
-	isClosed bool
-	fs       *SQLiteFS
-}
-
-// ErrFileNotFound represents an error when a file is not found in the storage.
-type ErrFileNotFound struct {
-	Path string
-}
-
-func (e *ErrFileNotFound) Error() string {
-	return fmt.Sprintf("file not found: %s", e.Path)
-}
 
 // getEntry retrieves the fileInfo for the given full_path, recursively searching through directories.
 func (s *storage) getEntry(full_path string) (*fileInfo, error) {
@@ -215,4 +204,41 @@ func (s *storage) getEntry(full_path string) (*fileInfo, error) {
 
 	// If we reach here, the file was not found
 	return nil, &ErrFileNotFound{Path: full_path}
+}
+
+/////////////////////////////////////////////////////////
+
+func clean(path string) string {
+	return filepath.Clean(filepath.FromSlash(path))
+}
+
+// ////////////////////////////////////////
+type content struct {
+	name  string
+	bytes []byte
+
+	m sync.RWMutex
+}
+
+//////////////////////////////////////////
+
+type file struct {
+	name     string
+	content  *content
+	position int64
+	flag     int
+	mode     os.FileMode
+	modTime  time.Time
+
+	isClosed bool
+	fs       *SQLiteFS
+}
+
+// ErrFileNotFound represents an error when a file is not found in the storage.
+type ErrFileNotFound struct {
+	Path string
+}
+
+func (e *ErrFileNotFound) Error() string {
+	return fmt.Sprintf("file not found: %s", e.Path)
 }

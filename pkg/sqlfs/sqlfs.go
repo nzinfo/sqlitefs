@@ -102,12 +102,13 @@ func (fs *SQLiteFS) Close() error {
 	return nil
 }
 
-func (fs *SQLiteFS) resolveLink(fullpath string, f *file) (target string, isLink bool) {
+func (fs *SQLiteFS) resolveLink(fullpath string, f *fileInfo) (target string, isLink bool) {
+	// 移植完成
 	if !isSymlink(f.mode) {
 		return fullpath, false
 	}
 
-	target = string(f.content.bytes)
+	target = f.target
 	if !isAbs(target) {
 		target = fs.Join(filepath.Dir(fullpath), target)
 	}
@@ -172,7 +173,7 @@ func (fs *SQLiteFS) ReadDir(path string) ([]os.FileInfo, error) {
 	}
 
 	var entries []os.FileInfo
-	for _, f := range fs.s.Children(path) {
+	for _, f := range *fs.s.Children(path) {
 		fi, _ := f.Stat()
 		entries = append(entries, fi)
 	}
@@ -244,7 +245,41 @@ func (fs *SQLiteFS) Capabilities() billy.Capability {
 		billy.TruncateCapability
 }
 
-// ////////////////////////////////////////////
+//////////////////////////////////////////////////
+
+func isCreate(flag int) bool {
+	return flag&os.O_CREATE != 0
+}
+
+func isExclusive(flag int) bool {
+	return flag&os.O_EXCL != 0
+}
+
+func isAppend(flag int) bool {
+	return flag&os.O_APPEND != 0
+}
+
+func isTruncate(flag int) bool {
+	return flag&os.O_TRUNC != 0
+}
+
+func isReadAndWrite(flag int) bool {
+	return flag&os.O_RDWR != 0
+}
+
+func isReadOnly(flag int) bool {
+	return flag == os.O_RDONLY
+}
+
+func isWriteOnly(flag int) bool {
+	return flag&os.O_WRONLY != 0
+}
+
+func isSymlink(m fs.FileMode) bool {
+	return m&os.ModeSymlink != 0
+}
+
+//////////////////////////////////////////////
 
 type FileType string
 

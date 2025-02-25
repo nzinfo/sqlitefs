@@ -16,34 +16,163 @@ import (
 func (s *storage) Has(path string) bool {
 	path = clean(path)
 
-	_, ok := s.files[path]
-	return ok
+	entry, err := s.getEntry(path)
+	if err != nil {
+		// TODO: log err ?
+		return false
+	}
+	return entry != nil
 }
 
 func (s *storage) New(path string, mode fs.FileMode, flag int) (*file, error) {
 	path = clean(path)
-	if s.Has(path) {
-		if !s.MustGet(path).mode.IsDir() {
+
+	// Check if file already exists
+	entry, err := s.getEntry(path)
+	if err == nil {
+		if !entry.mode.IsDir() {
 			return nil, fmt.Errorf("file already exists %q", path)
 		}
-
 		return nil, nil
 	}
 
-	name := filepath.Base(path)
+	// Get the parent path components that need to be created
+	var dirsToCreate []string
+	current := filepath.Dir(path)
+	for {
+		current = clean(current)
+		if current == string(separator) {
+			break
+		}
+		
+		if _, err := s.getEntry(current); err != nil {
+			dirsToCreate = append([]string{current}, dirsToCreate...)
+		}
+		current = filepath.Dir(current)
+	}
 
+	// Begin transaction
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction error: %v", err)
+	}
+	defer tx.Rollback()
+
+	// Get parent directory ID
+	parentPath := filepath.Dir(path)
+	var parentID int64
+	if parentPath == string(separator) {
+		parentID = 1 // Root directory ID
+	} else {
+		parentEntry, err := s.getEntry(parentPath)
+		if err != nil {
+			// Create parent directories in batch
+			stmt, tail, err := tx.Prepare(`
+				INSERT INTO entries (
+					parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
+				) VALUES (?, ?, ?, ?, ?, ?, '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+				RETURNING entry_id
+			`)
+			if err != nil {
+				return nil, fmt.Errorf("prepare directory creation statement error: %v", err)
+			}
+			if tail != "" {
+				stmt.Close()
+				return nil, fmt.Errorf("unexpected tail in SQL: %s", tail)
+			}
+			defer stmt.Close()
+
+			// Create each missing parent directory
+			currentParentID := int64(1) // Start from root
+			for _, dirPath := range dirsToCreate {
+				dirName := filepath.Base(dirPath)
+				
+				if err := stmt.BindInt64(1, currentParentID); err != nil {
+					return nil, fmt.Errorf("bind parent_id error: %v", err)
+				}
+				if err := stmt.BindText(2, dirName); err != nil {
+					return nil, fmt.Errorf("bind name error: %v", err)
+				}
+				if err := stmt.BindInt64(3, int64(os.ModeDir)); err != nil {
+					return nil, fmt.Errorf("bind mode_type error: %v", err)
+				}
+				if err := stmt.BindInt64(4, int64(0755)); err != nil {
+					return nil, fmt.Errorf("bind mode_perm error: %v", err)
+				}
+				if err := stmt.BindInt64(5, 0); err != nil {
+					return nil, fmt.Errorf("bind uid error: %v", err)
+				}
+				if err := stmt.BindInt64(6, 0); err != nil {
+					return nil, fmt.Errorf("bind gid error: %v", err)
+				}
+
+				if !stmt.Step() {
+					return nil, fmt.Errorf("execute directory creation error: %v", stmt.Err())
+				}
+				
+				currentParentID = stmt.ColumnInt64(0)
+				stmt.Reset()
+			}
+			parentID = currentParentID
+		} else {
+			parentID = parentEntry.entryID
+		}
+	}
+
+	// Create the new file
+	stmt, tail, err := tx.Prepare(`
+		INSERT INTO entries (
+			parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
+		) VALUES (?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		RETURNING entry_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("prepare file creation statement error: %v", err)
+	}
+	if tail != "" {
+		stmt.Close()
+		return nil, fmt.Errorf("unexpected tail in SQL: %s", tail)
+	}
+	defer stmt.Close()
+
+	name := filepath.Base(path)
+	if err := stmt.BindInt64(1, parentID); err != nil {
+		return nil, fmt.Errorf("bind parent_id error: %v", err)
+	}
+	if err := stmt.BindText(2, name); err != nil {
+		return nil, fmt.Errorf("bind name error: %v", err)
+	}
+	if err := stmt.BindInt64(3, int64(mode&os.ModeType)); err != nil {
+		return nil, fmt.Errorf("bind mode_type error: %v", err)
+	}
+	if err := stmt.BindInt64(4, int64(mode.Perm())); err != nil {
+		return nil, fmt.Errorf("bind mode_perm error: %v", err)
+	}
+	if err := stmt.BindInt64(5, 0); err != nil {
+		return nil, fmt.Errorf("bind uid error: %v", err)
+	}
+	if err := stmt.BindInt64(6, 0); err != nil {
+		return nil, fmt.Errorf("bind gid error: %v", err)
+	}
+
+	if !stmt.Step() {
+		return nil, fmt.Errorf("execute file creation error: %v", stmt.Err())
+	}
+
+	entryID := stmt.ColumnInt64(0)
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit transaction error: %v", err)
+	}
+
+	// Create and return the file object
 	f := &file{
 		name:    name,
 		content: &content{name: name},
 		mode:    mode,
 		flag:    flag,
 		modTime: time.Now(),
-	}
-
-	s.files[path] = f
-	err := s.createParent(path, mode, f)
-	if err != nil {
-		return nil, err
+		entryID: entryID,
 	}
 
 	return f, nil
@@ -63,23 +192,25 @@ func (s *storage) createParent(path string, mode fs.FileMode, f *file) error {
 	return s.createParent(base, mode.Perm()|os.ModeDir, f)
 }
 
-func (s *storage) Children(path string) []*file {
+func (s *storage) Children(path string) *[]fileInfo {
 	path = clean(path)
 
-	children, ok := s.children[path]
-	if !ok {
+	entry, err := s.getEntry(path)
+
+	if !entry.mode.IsDir() {
 		return nil
 	}
 
-	var c []*file
-	for _, f := range children {
-		c = append(c, f)
+	entriesResult := s.LoadEntriesByParent(entry.entryID, path)
+	entries, err := entriesResult.Wait()
+	if err != nil {
+		// FIXME: log the error.
+		return nil
 	}
-
-	return c
+	return &entries
 }
 
-func (s *storage) MustGet(path string) *file {
+func (s *storage) MustGet(path string) *fileInfo {
 	f, ok := s.Get(path)
 	if !ok {
 		panic(fmt.Sprintf("couldn't find %q", path))
@@ -88,13 +219,17 @@ func (s *storage) MustGet(path string) *file {
 	return f
 }
 
-func (s *storage) Get(path string) (*file, bool) {
+func (s *storage) Get(path string) (*fileInfo, bool) {
 	path = clean(path)
-	f, ok := s.files[path]
-	return f, ok
+	entry, err := s.getEntry(path)
+	if err != nil {
+		return nil, false
+	}
+	return entry, true
 }
 
 func (s *storage) Rename(from, to string) error {
+	// Rename 与 Remove 均涉及 Cache 的无效
 	from = clean(from)
 	to = clean(to)
 
@@ -210,25 +345,6 @@ func (c *content) ReadAt(b []byte, off int64) (n int, err error) {
 	return
 }
 
-/////////////////////////////
-/*
-// LoadEntry implements StorageOps.LoadEntry
-func (s *storage) LoadEntry(entryID int64) *AsyncResult[*fileInfo] {
-	result := NewAsyncResult[*fileInfo]()
-
-	// Load from database if not cached
-	go func() {
-		fi, err := s.loadEntrySync(entryID)
-		if err != nil {
-			result.Complete(nil, err)
-			return
-		}
-		result.Complete(fi, nil)
-	}()
-	return result
-}
-*/
-
 // LoadEntriesByParent implements StorageOps.LoadEntriesByParent
 func (s *storage) LoadEntriesByParent(parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
 	result := NewAsyncResult[[]fileInfo]()
@@ -249,59 +365,6 @@ func (s *storage) LoadEntriesByParent(parentID int64, parentPath string) *AsyncR
 	}()
 	return result
 }
-
-/*
-// loadEntry loads a single entry by its ID
-func (s *storage) loadEntrySync(entryID int64) (*fileInfo, error) {
-	stmt, tail, err := s.conn.Prepare(`
-		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
-		FROM entries
-		WHERE entry_id = ?
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("prepare statement error: %v", err)
-	}
-	if tail != "" {
-		stmt.Close()
-		return nil, fmt.Errorf("unexpected tail in SQL: %s", tail)
-	}
-	defer stmt.Close()
-
-	if err := stmt.BindInt64(1, entryID); err != nil {
-		return nil, fmt.Errorf("bind entry_id error: %v", err)
-	}
-
-	if !stmt.Step() {
-		if err := stmt.Err(); err != nil {
-			return nil, fmt.Errorf("execute statement error: %v", err)
-		}
-		return nil, os.ErrNotExist
-	}
-
-	createTime := time.Unix(stmt.ColumnInt64(8), 0)
-	modTime := time.Unix(stmt.ColumnInt64(9), 0)
-
-	// Combine mode_type and mode_perm
-	modeType := stmt.ColumnInt64(3)
-	modePerm := stmt.ColumnInt64(4)
-	mode := fs.FileMode(modeType | modePerm)
-
-	fi := &fileInfo{
-		entryID:  stmt.ColumnInt64(0),
-		parentID: stmt.ColumnInt64(1),
-		name:     stmt.ColumnText(2),
-		fullPath: path.Join(parentPath, stmt.ColumnText(2)), // FIXME: 使用文件系統自身提供的 Join.
-		mode:     mode,
-		uid:      int(stmt.ColumnInt64(5)),
-		gid:      int(stmt.ColumnInt64(6)),
-		target:   stmt.ColumnText(7),
-		createAt: createTime,
-		modTime:  modTime,
-	}
-
-	return fi, nil
-}
-*/
 
 // loadEntriesByParent loads all entries in a directory by parent_id
 func (s *storage) loadEntriesByParentSync(parentID int64, parentPath string) ([]fileInfo, error) {
