@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,7 +23,7 @@ const separator = filepath.Separator
 type SQLiteFS struct {
 	s         *storage
 	mu        sync.Mutex
-	openFiles map[*file]bool
+	openFiles map[EntryID]*file
 }
 
 // New returns a new Memory filesystem.
@@ -35,7 +34,7 @@ func NewSQLiteFS(dbName string) (billy.Filesystem, error) {
 	}
 	fs := &SQLiteFS{s: s}
 
-	fs.openFiles = make(map[*file]bool)
+	// fs.openFiles = make(map[*file]bool)
 	return chroot.New(fs, string(separator)), nil
 }
 
@@ -78,27 +77,33 @@ func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy
 		return nil, fmt.Errorf("cannot open directory: %s", filename)
 	}
 
-	fs.openFiles[f] = true
-	return f.Duplicate(filename, perm, flag), nil
+	// 仅有 fileInfo 不足以打开文件，需要加载文件的 chunks, 这个过程应该是异步的。
+	file, err := OpenFile(fs, f, flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	fs.openFiles[f.entryID] = file
+	return file, nil
 }
 
-func (fs *SQLiteFS) removeOpenFile(f *file) {
+func (fs *SQLiteFS) closeFile(fi *fileInfo) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	delete(fs.openFiles, f)
+	// delete(fs.openFiles, f)
 }
 
 func (fs *SQLiteFS) Close() error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	for f := range fs.openFiles {
-		if err := f.Close(); err != nil {
-			log.Printf("Error closing file: %v", err)
+	/*
+		for f := range fs.openFiles {
+			if err := f.Close(); err != nil {
+				log.Printf("Error closing file: %v", err)
+			}
+			delete(fs.openFiles, f)
 		}
-		delete(fs.openFiles, f)
-	}
-
+	*/
 	return nil
 }
 
@@ -221,6 +226,7 @@ func (fs *SQLiteFS) Symlink(target, link string) error {
 		return err
 	}
 
+	// FIXME: re-implement save target to fileInfo's target.
 	return util.WriteFile(fs, link, []byte(target), 0777|os.ModeSymlink)
 }
 
@@ -238,7 +244,7 @@ func (fs *SQLiteFS) Readlink(link string) (string, error) {
 		}
 	}
 
-	return string(f.content.bytes), nil
+	return f.target, nil
 }
 
 // Capabilities implements the Capable interface.
@@ -295,8 +301,8 @@ const (
 )
 
 type fileInfo struct {
-	entryID  int64       // Primary key from entries table
-	parentID int64       // Parent directory ID (0 for root)
+	entryID  EntryID     // Primary key from entries table
+	parentID EntryID     // Parent directory ID (0 for root)
 	name     string      // File/directory name
 	fullPath string      // Full path of the file/directory
 	mode     os.FileMode // File mode/permissions

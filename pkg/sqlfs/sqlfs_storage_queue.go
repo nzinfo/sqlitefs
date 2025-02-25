@@ -4,12 +4,7 @@ package sqlfs
 
 import "io/fs"
 
-func (s *storage) LoadEntry(entryID int64) *AsyncResult[*fileInfo] {
-	result := NewAsyncResult[*fileInfo]()
-	return result
-}
-
-func (s *storage) LoadEntriesByParent(parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
+func (s *storage) LoadEntriesByParent(parentID EntryID, parentPath string) *AsyncResult[[]fileInfo] {
 	result := NewAsyncResult[[]fileInfo]()
 	return result
 }

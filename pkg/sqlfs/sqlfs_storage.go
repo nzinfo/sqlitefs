@@ -3,7 +3,6 @@ package sqlfs
 import (
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -44,7 +43,7 @@ type StorageOps interface {
 	// LoadEntry(entryID int64) *AsyncResult[*fileInfo]
 
 	// LoadEntriesByParent loads all entries in a directory by parent_id asynchronously
-	LoadEntriesByParent(parentID int64, parentPath string) *AsyncResult[[]fileInfo]
+	LoadEntriesByParent(parentID EntryID, parentPath string) *AsyncResult[[]fileInfo]
 }
 
 type storage struct {
@@ -57,7 +56,7 @@ type storage struct {
 	entriesCache *lru.Cache // LRU cache for file/directory information, full_path -> entryId.
 	dirsCache    *lru.Cache // LRU cache for directory information	entryId -> infoList.
 	rootEntry    *fileInfo
-	maxEntryID   int64
+	maxEntryID   EntryID
 }
 
 func newStorage(dbName string) (*storage, error) {
@@ -115,8 +114,8 @@ func loadRootEntry(conn *sqlite3.Conn) *fileInfo {
 	mode := fs.FileMode(modeType | modePerm)
 
 	fi := &fileInfo{
-		entryID:  stmt.ColumnInt64(0),
-		parentID: stmt.ColumnInt64(1),
+		entryID:  EntryID(stmt.ColumnInt64(0)),
+		parentID: EntryID(stmt.ColumnInt64(1)),
 		name:     stmt.ColumnText(2),
 		fullPath: "/", // 因为是根目录, 所以 fullPath 固定是 /
 		mode:     mode,
@@ -130,7 +129,7 @@ func loadRootEntry(conn *sqlite3.Conn) *fileInfo {
 	return fi
 }
 
-func loadMaxEntryID(conn *sqlite3.Conn) int64 {
+func loadMaxEntryID(conn *sqlite3.Conn) EntryID {
 	stmt, tail, err := conn.Prepare(`
 		SELECT MAX(entry_id) FROM entries
 	`)
@@ -148,7 +147,7 @@ func loadMaxEntryID(conn *sqlite3.Conn) int64 {
 	}
 
 	// Get the max entry_id
-	maxEntryID := stmt.ColumnInt64(0)
+	maxEntryID := EntryID(stmt.ColumnInt64(0))
 	return maxEntryID //, nil
 }
 
@@ -175,7 +174,7 @@ func (s *storage) getEntry(full_path string) (*fileInfo, error) {
 
 	// fmt.Println("getEntry:", full_path, dirPath, fileName)
 
-	var parentID int64
+	var parentID EntryID
 	if dirPath == "/" {
 		parentID = 1 // root directory
 	} else {
@@ -220,20 +219,7 @@ type content struct {
 	m sync.RWMutex
 }
 
-//////////////////////////////////////////
-
-type file struct {
-	name     string
-	content  *content
-	position int64
-	flag     int
-	mode     os.FileMode
-	modTime  time.Time
-
-	isClosed bool
-	fs       *SQLiteFS
-}
-
+// ////////////////////////////////////////
 // ErrFileNotFound represents an error when a file is not found in the storage.
 type ErrFileNotFound struct {
 	Path string

@@ -36,7 +36,7 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 	// Get the parent path components that need to be created
 	var dirsToCreate []string
 	current := filepath.Dir(path)
-	var currentParentID int64 = 1 // Default to root
+	var currentParentID EntryID = 1 // Default to root
 
 	for {
 		current = clean(current)
@@ -78,10 +78,10 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 		s.maxEntryID++ // Increment for each new directory
 		dirName := filepath.Base(dirPath)
 
-		if err := stmt.BindInt64(1, s.maxEntryID); err != nil {
+		if err := stmt.BindInt64(1, int64(s.maxEntryID)); err != nil {
 			return nil, fmt.Errorf("bind entry_id error: %v", err)
 		}
-		if err := stmt.BindInt64(2, currentParentID); err != nil {
+		if err := stmt.BindInt64(2, int64(currentParentID)); err != nil {
 			return nil, fmt.Errorf("bind parent_id error: %v", err)
 		}
 		if err := stmt.BindText(3, dirName); err != nil {
@@ -115,10 +115,10 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 	s.maxEntryID++
 	name := filepath.Base(path)
 
-	if err := stmt.BindInt64(1, s.maxEntryID); err != nil {
+	if err := stmt.BindInt64(1, int64(s.maxEntryID)); err != nil {
 		return nil, fmt.Errorf("bind entry_id error: %v", err)
 	}
-	if err := stmt.BindInt64(2, currentParentID); err != nil {
+	if err := stmt.BindInt64(2, int64(currentParentID)); err != nil {
 		return nil, fmt.Errorf("bind parent_id error: %v", err)
 	}
 	if err := stmt.BindText(3, name); err != nil {
@@ -226,7 +226,7 @@ func (s *storage) Rename(from, to string) error {
 
 	// 3. 获取 to 的父目录
 	toParentPath := filepath.Dir(to)
-	var toParentID int64
+	var toParentID EntryID
 	if toParentPath == string(separator) {
 		toParentID = 1 // root
 	} else {
@@ -254,13 +254,13 @@ func (s *storage) Rename(from, to string) error {
 	}
 	defer stmt.Close()
 
-	if err := stmt.BindInt64(1, toParentID); err != nil {
+	if err := stmt.BindInt64(1, int64(toParentID)); err != nil {
 		return fmt.Errorf("bind parent_id error: %v", err)
 	}
 	if err := stmt.BindText(2, filepath.Base(to)); err != nil {
 		return fmt.Errorf("bind name error: %v", err)
 	}
-	if err := stmt.BindInt64(3, fromEntry.entryID); err != nil {
+	if err := stmt.BindInt64(3, int64(fromEntry.entryID)); err != nil {
 		return fmt.Errorf("bind entry_id error: %v", err)
 	}
 
@@ -342,7 +342,7 @@ func (s *storage) Remove(path string) error {
 	}
 	defer stmt.Close()
 
-	if err := stmt.BindInt64(1, f.entryID); err != nil {
+	if err := stmt.BindInt64(1, int64(f.entryID)); err != nil {
 		return fmt.Errorf("bind entry_id error: %v", err)
 	}
 
@@ -421,7 +421,7 @@ func (c *content) ReadAt(b []byte, off int64) (n int, err error) {
 }
 
 // LoadEntriesByParent implements StorageOps.LoadEntriesByParent
-func (s *storage) LoadEntriesByParent(parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
+func (s *storage) LoadEntriesByParent(parentID EntryID, parentPath string) *AsyncResult[[]fileInfo] {
 	result := NewAsyncResult[[]fileInfo]()
 	if cached, ok := s.dirsCache.Get(parentID); ok {
 		result.Complete(cached.([]fileInfo), nil)
@@ -442,7 +442,7 @@ func (s *storage) LoadEntriesByParent(parentID int64, parentPath string) *AsyncR
 }
 
 // loadEntriesByParent loads all entries in a directory by parent_id
-func (s *storage) loadEntriesByParentSync(parentID int64, parentPath string) ([]fileInfo, error) {
+func (s *storage) loadEntriesByParentSync(parentID EntryID, parentPath string) ([]fileInfo, error) {
 	stmt, tail, err := s.conn.Prepare(`
 		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
 		FROM entries
@@ -457,7 +457,7 @@ func (s *storage) loadEntriesByParentSync(parentID int64, parentPath string) ([]
 	}
 	defer stmt.Close()
 
-	if err := stmt.BindInt64(1, parentID); err != nil {
+	if err := stmt.BindInt64(1, int64(parentID)); err != nil {
 		return nil, fmt.Errorf("bind parent_id error: %v", err)
 	}
 
@@ -476,8 +476,8 @@ func (s *storage) loadEntriesByParentSync(parentID int64, parentPath string) ([]
 		mode := fs.FileMode(modeType | modePerm)
 
 		fi := fileInfo{
-			entryID:  stmt.ColumnInt64(0),
-			parentID: stmt.ColumnInt64(1),
+			entryID:  EntryID(stmt.ColumnInt64(0)),
+			parentID: EntryID(stmt.ColumnInt64(1)),
 			name:     stmt.ColumnText(2),
 			fullPath: path.Join(parentPath, stmt.ColumnText(2)),
 			mode:     mode,

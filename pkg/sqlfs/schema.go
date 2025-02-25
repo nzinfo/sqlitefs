@@ -95,3 +95,5 @@ const (
 	ModeDirValue   = os.ModeDir
 	ModePermValue  = 0755
 )
+
+type EntryID int64

@@ -2,6 +2,7 @@ package sqlfs
 
 import (
 	"io/fs"
+	"os"
 	"time"
 )
 
@@ -27,6 +28,15 @@ func (fi *fileInfo) IsDir() bool {
 
 func (*fileInfo) Sys() interface{} {
 	return nil
+}
+
+func (fi *fileInfo) Stat() (os.FileInfo, error) {
+	return &fileInfo{
+		name:    fi.name,
+		mode:    fi.mode,
+		size:    fi.size,
+		modTime: fi.modTime,
+	}, nil
 }
 
 func (c *content) Truncate() {

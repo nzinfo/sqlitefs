@@ -10,8 +10,26 @@ import (
 	"github.com/go-git/go-billy/v6"
 )
 
+// 定义为 file，实现 billy.File 约定的接口
+type file struct {
+	fs       *SQLiteFS
+	fileInfo *fileInfo
+	flag     int
+	mode     os.FileMode
+	position int64
+}
+
+func OpenFile(fs *SQLiteFS, fileInfo *fileInfo, flag int, perm os.FileMode) (*file, error) {
+	return &file{
+		fs:       fs,
+		fileInfo: fileInfo,
+		flag:     flag,
+		mode:     perm,
+	}, nil
+}
+
 func (f *file) Name() string {
-	return f.name
+	return f.fileInfo.Name()
 }
 
 func (f *file) Read(b []byte) (int, error) {
@@ -26,7 +44,7 @@ func (f *file) Read(b []byte) (int, error) {
 }
 
 func (f *file) ReadAt(b []byte, off int64) (int, error) {
-	if f.isClosed {
+	if f.fileInfo == nil {
 		return 0, os.ErrClosed
 	}
 
@@ -41,7 +59,7 @@ func (f *file) ReadAt(b []byte, off int64) (int, error) {
 }
 
 func (f *file) Seek(offset int64, whence int) (int64, error) {
-	if f.isClosed {
+	if f.fileInfo == nil {
 		return 0, os.ErrClosed
 	}
 
@@ -62,7 +80,7 @@ func (f *file) Write(p []byte) (int, error) {
 }
 
 func (f *file) WriteAt(p []byte, off int64) (int, error) {
-	if f.isClosed {
+	if f.fileInfo == nil {
 		return 0, os.ErrClosed
 	}
 
@@ -79,12 +97,12 @@ func (f *file) WriteAt(p []byte, off int64) (int, error) {
 }
 
 func (f *file) Close() error {
-	if f.isClosed {
+	if f.fileInfo == nil {
 		return os.ErrClosed
 	}
 
-	f.isClosed = true
-	// f.fs.removeOpenFile(f)
+	f.fs.closeFile(f.fileInfo) // 通知文件系统文件关闭
+	f.fileInfo = nil
 	return nil
 }
 
@@ -120,12 +138,8 @@ func (f *file) Duplicate(filename string, mode fs.FileMode, flag int) billy.File
 }
 
 func (f *file) Stat() (os.FileInfo, error) {
-	return &fileInfo{
-		name:    f.Name(),
-		mode:    f.mode,
-		size:    int64(f.content.Len()),
-		modTime: f.modTime,
-	}, nil
+	// 此处是否需要检查 fileInfo ?
+	return f.fileInfo.Stat()
 }
 
 // Lock is a no-op in memfs.
