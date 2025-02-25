@@ -165,22 +165,22 @@ func (s *storage) createParent(path string, mode fs.FileMode, f *file) error {
 	return s.createParent(base, mode.Perm()|os.ModeDir, f)
 }
 
-func (s *storage) Children(path string) *[]fileInfo {
+func (s *storage) Children(path string) (*[]fileInfo, error) {
 	path = clean(path)
 
 	entry, err := s.getEntry(path)
 
 	if !entry.mode.IsDir() {
-		return nil
+		return nil, fmt.Errorf("%s is not a directory", path)
 	}
 
 	entriesResult := s.LoadEntriesByParent(entry.entryID, path)
 	entries, err := entriesResult.Wait()
 	if err != nil {
 		// FIXME: log the error.
-		return nil
+		return nil, err
 	}
-	return &entries
+	return &entries, nil
 }
 
 func (s *storage) MustGet(path string) *fileInfo {
@@ -314,16 +314,58 @@ func (s *storage) move(from, to string) error {
 func (s *storage) Remove(path string) error {
 	path = clean(path)
 
-	f, has := s.Get(path)
-	if !has {
+	f, err := s.getEntry(path)
+	if err != nil {
 		return os.ErrNotExist
 	}
 
-	if f.mode.IsDir() && len(s.Children(path)) != 0 {
-		return fmt.Errorf("directory not empty: %s", path)
+	if f.mode.IsDir() {
+		subItems, err := s.Children(path)
+		if err != nil {
+			return err
+		}
+		if subItems != nil && len(*subItems) != 0 {
+			return fmt.Errorf("directory not empty: %s", path)
+		}
 	}
 
-	delete(s.files, path)
+	// 开始事务删除
+	tx := s.conn.Begin()
+	defer tx.Rollback()
+
+	stmt, _, err := s.conn.Prepare(`
+		DELETE FROM entries 
+		WHERE entry_id = ?
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare delete statement error: %v", err)
+	}
+	defer stmt.Close()
+
+	if err := stmt.BindInt64(1, f.entryID); err != nil {
+		return fmt.Errorf("bind entry_id error: %v", err)
+	}
+
+	if err := stmt.Exec(); err != nil {
+		return fmt.Errorf("execute delete error: %v", stmt.Err())
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction error: %v", err)
+	}
+
+	// 清理缓存
+	// 1. 清理被删除项在 entriesCache 中的缓存
+	s.entriesCache.Remove(path)
+
+	// 2. 清理父目录在 dirsCache 中的缓存，不需要特别考虑 rootDir
+	s.dirsCache.Remove(f.parentID)
+
+	// 3. 如果删除的是目录，清理其 dirsCache
+	if f.mode.IsDir() {
+		s.dirsCache.Remove(f.entryID)
+	}
+
 	return nil
 }
 

@@ -22,8 +22,8 @@ func (s *storage) Get(path string) (*fileInfo, bool) {
 	return nil, false
 }
 
-func (s *storage) Children(path string) *[]fileInfo {
-	return nil
+func (s *storage) Children(path string) (*[]fileInfo, error) {
+	return nil, nil
 }
 
 func (s *storage) Rename(from, to string) error {

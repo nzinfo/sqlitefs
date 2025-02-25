@@ -173,7 +173,12 @@ func (fs *SQLiteFS) ReadDir(path string) ([]os.FileInfo, error) {
 	}
 
 	var entries []os.FileInfo
-	for _, f := range *fs.s.Children(path) {
+	subItems, err := fs.s.Children(path)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, f := range *subItems {
 		fi, _ := f.Stat()
 		entries = append(entries, fi)
 	}
