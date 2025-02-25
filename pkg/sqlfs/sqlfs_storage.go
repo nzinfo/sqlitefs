@@ -2,6 +2,7 @@ package sqlfs
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -55,6 +56,7 @@ type storage struct {
 	conn         *sqlite3.Conn
 	entriesCache *lru.Cache // LRU cache for file/directory information, full_path -> entryId.
 	dirsCache    *lru.Cache // LRU cache for directory information	entryId -> infoList.
+	rootEntry    *fileInfo
 }
 
 func newStorage(dbName string) (*storage, error) {
@@ -73,7 +75,57 @@ func newStorage(dbName string) (*storage, error) {
 		conn:         conn,
 		entriesCache: lru.New(500), // Initialize entries cache
 		dirsCache:    lru.New(100), // Initialize directories cache
+		rootEntry:    loadRootEntry(conn),
 	}, nil
+}
+
+func loadRootEntry(conn *sqlite3.Conn) *fileInfo {
+
+	entryID := int64(1)
+
+	stmt, _, err := conn.Prepare(`
+		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
+		FROM entries
+		WHERE entry_id = ?
+	`)
+	if err != nil {
+		return nil
+	}
+	defer stmt.Close()
+
+	if err := stmt.BindInt64(1, entryID); err != nil {
+		return nil
+	}
+
+	if !stmt.Step() {
+		if err := stmt.Err(); err != nil {
+			return nil
+		}
+		return nil
+	}
+
+	createTime := time.Unix(stmt.ColumnInt64(8), 0)
+	modTime := time.Unix(stmt.ColumnInt64(9), 0)
+
+	// Combine mode_type and mode_perm
+	modeType := stmt.ColumnInt64(3)
+	modePerm := stmt.ColumnInt64(4)
+	mode := fs.FileMode(modeType | modePerm)
+
+	fi := &fileInfo{
+		entryID:  stmt.ColumnInt64(0),
+		parentID: stmt.ColumnInt64(1),
+		name:     stmt.ColumnText(2),
+		fullPath: "/", // 因为是根目录, 所以 fullPath 固定是 /
+		mode:     mode,
+		uid:      int(stmt.ColumnInt64(5)),
+		gid:      int(stmt.ColumnInt64(6)),
+		target:   stmt.ColumnText(7),
+		createAt: createTime,
+		modTime:  modTime,
+	}
+
+	return fi
 }
 
 /////////////////////////////////////////////
@@ -125,7 +177,7 @@ func (s *storage) getEntry(full_path string) (*fileInfo, error) {
 
 	// Handle root directory specially
 	if full_path == "/" {
-		return &fileInfo{name: "/", entryID: 1}, nil
+		return s.rootEntry, nil
 	}
 
 	// Split into directory and file name
