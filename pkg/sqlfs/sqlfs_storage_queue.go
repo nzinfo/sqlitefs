@@ -14,7 +14,7 @@ func (s *storage) LoadEntriesByParent(parentID int64, parentPath string) *AsyncR
 	return result
 }
 
-func (s *storage) New(path string, mode fs.FileMode, flag int) (*file, error) {
+func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error) {
 	return nil, nil
 }
 

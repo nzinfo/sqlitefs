@@ -9,7 +9,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -24,13 +23,11 @@ func (s *storage) Has(path string) bool {
 	return entry != nil
 }
 
-func (s *storage) New(path string, mode fs.FileMode, flag int) (*file, error) {
+func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error) {
 	path = clean(path)
 
-	// Check if file already exists
-	entry, err := s.getEntry(path)
-	if err == nil {
-		if !entry.mode.IsDir() {
+	if s.Has(path) {
+		if !s.MustGet(path).mode.IsDir() {
 			return nil, fmt.Errorf("file already exists %q", path)
 		}
 		return nil, nil
@@ -39,143 +36,119 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*file, error) {
 	// Get the parent path components that need to be created
 	var dirsToCreate []string
 	current := filepath.Dir(path)
+	var currentParentID int64 = 1 // Default to root
+
 	for {
 		current = clean(current)
 		if current == string(separator) {
+			currentParentID = 1 // root
 			break
 		}
-		
-		if _, err := s.getEntry(current); err != nil {
-			dirsToCreate = append([]string{current}, dirsToCreate...)
+
+		entry, err := s.getEntry(current)
+		if err == nil {
+			// Found an existing entry, check if it's a directory
+			if entry.mode&os.ModeDir == 0 {
+				return nil, fmt.Errorf("parent path component %q exists but is not a directory", current)
+			}
+			currentParentID = entry.entryID
+			break
 		}
+		dirsToCreate = append([]string{current}, dirsToCreate...)
 		current = filepath.Dir(current)
 	}
 
 	// Begin transaction
-	tx, err := s.db.Begin()
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction error: %v", err)
-	}
+	tx := s.conn.Begin()
 	defer tx.Rollback()
 
-	// Get parent directory ID
-	parentPath := filepath.Dir(path)
-	var parentID int64
-	if parentPath == string(separator) {
-		parentID = 1 // Root directory ID
-	} else {
-		parentEntry, err := s.getEntry(parentPath)
-		if err != nil {
-			// Create parent directories in batch
-			stmt, tail, err := tx.Prepare(`
-				INSERT INTO entries (
-					parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
-				) VALUES (?, ?, ?, ?, ?, ?, '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-				RETURNING entry_id
-			`)
-			if err != nil {
-				return nil, fmt.Errorf("prepare directory creation statement error: %v", err)
-			}
-			if tail != "" {
-				stmt.Close()
-				return nil, fmt.Errorf("unexpected tail in SQL: %s", tail)
-			}
-			defer stmt.Close()
-
-			// Create each missing parent directory
-			currentParentID := int64(1) // Start from root
-			for _, dirPath := range dirsToCreate {
-				dirName := filepath.Base(dirPath)
-				
-				if err := stmt.BindInt64(1, currentParentID); err != nil {
-					return nil, fmt.Errorf("bind parent_id error: %v", err)
-				}
-				if err := stmt.BindText(2, dirName); err != nil {
-					return nil, fmt.Errorf("bind name error: %v", err)
-				}
-				if err := stmt.BindInt64(3, int64(os.ModeDir)); err != nil {
-					return nil, fmt.Errorf("bind mode_type error: %v", err)
-				}
-				if err := stmt.BindInt64(4, int64(0755)); err != nil {
-					return nil, fmt.Errorf("bind mode_perm error: %v", err)
-				}
-				if err := stmt.BindInt64(5, 0); err != nil {
-					return nil, fmt.Errorf("bind uid error: %v", err)
-				}
-				if err := stmt.BindInt64(6, 0); err != nil {
-					return nil, fmt.Errorf("bind gid error: %v", err)
-				}
-
-				if !stmt.Step() {
-					return nil, fmt.Errorf("execute directory creation error: %v", stmt.Err())
-				}
-				
-				currentParentID = stmt.ColumnInt64(0)
-				stmt.Reset()
-			}
-			parentID = currentParentID
-		} else {
-			parentID = parentEntry.entryID
-		}
-	}
-
-	// Create the new file
-	stmt, tail, err := tx.Prepare(`
+	// Prepare statement for both directory and file creation
+	stmt, _, err := s.conn.Prepare(`
 		INSERT INTO entries (
-			parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
-		) VALUES (?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		RETURNING entry_id
+			entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`)
 	if err != nil {
-		return nil, fmt.Errorf("prepare file creation statement error: %v", err)
-	}
-	if tail != "" {
-		stmt.Close()
-		return nil, fmt.Errorf("unexpected tail in SQL: %s", tail)
+		return nil, fmt.Errorf("prepare statement error: %v", err)
 	}
 	defer stmt.Close()
 
+	// Create parent directories if needed
+	for _, dirPath := range dirsToCreate {
+		s.maxEntryID++ // Increment for each new directory
+		dirName := filepath.Base(dirPath)
+
+		if err := stmt.BindInt64(1, s.maxEntryID); err != nil {
+			return nil, fmt.Errorf("bind entry_id error: %v", err)
+		}
+		if err := stmt.BindInt64(2, currentParentID); err != nil {
+			return nil, fmt.Errorf("bind parent_id error: %v", err)
+		}
+		if err := stmt.BindText(3, dirName); err != nil {
+			return nil, fmt.Errorf("bind name error: %v", err)
+		}
+		if err := stmt.BindInt64(4, int64(os.ModeDir)); err != nil {
+			return nil, fmt.Errorf("bind mode_type error: %v", err)
+		}
+		if err := stmt.BindInt64(5, int64(mode.Perm())); err != nil { // FIXME: 应继承权限，当前版本暂不考虑
+			return nil, fmt.Errorf("bind mode_perm error: %v", err)
+		}
+		if err := stmt.BindInt64(6, 0); err != nil {
+			return nil, fmt.Errorf("bind uid error: %v", err)
+		}
+		if err := stmt.BindInt64(7, 0); err != nil {
+			return nil, fmt.Errorf("bind gid error: %v", err)
+		}
+		if err := stmt.BindText(8, "[]"); err != nil { // Empty array for directory
+			return nil, fmt.Errorf("bind target error: %v", err)
+		}
+
+		if !stmt.Step() {
+			return nil, fmt.Errorf("execute directory creation error: %v", stmt.Err())
+		}
+
+		currentParentID = s.maxEntryID
+		stmt.Reset()
+	}
+
+	// Create the new file using the same statement
+	s.maxEntryID++
 	name := filepath.Base(path)
-	if err := stmt.BindInt64(1, parentID); err != nil {
+
+	if err := stmt.BindInt64(1, s.maxEntryID); err != nil {
+		return nil, fmt.Errorf("bind entry_id error: %v", err)
+	}
+	if err := stmt.BindInt64(2, currentParentID); err != nil {
 		return nil, fmt.Errorf("bind parent_id error: %v", err)
 	}
-	if err := stmt.BindText(2, name); err != nil {
+	if err := stmt.BindText(3, name); err != nil {
 		return nil, fmt.Errorf("bind name error: %v", err)
 	}
-	if err := stmt.BindInt64(3, int64(mode&os.ModeType)); err != nil {
+	if err := stmt.BindInt64(4, int64(mode.Type())); err != nil { // mode&os.ModeType  不一定是常规文件
 		return nil, fmt.Errorf("bind mode_type error: %v", err)
 	}
-	if err := stmt.BindInt64(4, int64(mode.Perm())); err != nil {
+	if err := stmt.BindInt64(5, int64(mode.Perm())); err != nil {
 		return nil, fmt.Errorf("bind mode_perm error: %v", err)
 	}
-	if err := stmt.BindInt64(5, 0); err != nil {
+	if err := stmt.BindInt64(6, 0); err != nil {
 		return nil, fmt.Errorf("bind uid error: %v", err)
 	}
-	if err := stmt.BindInt64(6, 0); err != nil {
+	if err := stmt.BindInt64(7, 0); err != nil {
 		return nil, fmt.Errorf("bind gid error: %v", err)
+	}
+	if err := stmt.BindNull(8); err != nil { // NULL for regular file
+		return nil, fmt.Errorf("bind target error: %v", err)
 	}
 
 	if !stmt.Step() {
 		return nil, fmt.Errorf("execute file creation error: %v", stmt.Err())
 	}
 
-	entryID := stmt.ColumnInt64(0)
-
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit transaction error: %v", err)
 	}
 
-	// Create and return the file object
-	f := &file{
-		name:    name,
-		content: &content{name: name},
-		mode:    mode,
-		flag:    flag,
-		modTime: time.Now(),
-		entryID: entryID,
-	}
-
-	return f, nil
+	return s.getEntry(path) // 从数据库中再次加载
 }
 
 func (s *storage) createParent(path string, mode fs.FileMode, f *file) error {
@@ -229,40 +202,99 @@ func (s *storage) Get(path string) (*fileInfo, bool) {
 }
 
 func (s *storage) Rename(from, to string) error {
-	// Rename 与 Remove 均涉及 Cache 的无效
 	from = clean(from)
 	to = clean(to)
 
-	if !s.Has(from) {
-		return os.ErrNotExist
+	// 1. 确认 from 存在
+	fromEntry, err := s.getEntry(from)
+	if err != nil {
+		return fmt.Errorf("source path %q does not exist", from)
 	}
 
-	move := [][2]string{{from, to}}
-
-	for pathFrom := range s.files {
-		if pathFrom == from {
-			continue
-		}
-
-		if strings.HasPrefix(pathFrom, from+string(separator)) {
-			rel, _ := filepath.Rel(from, pathFrom)
-			pathTo := filepath.Join(to, rel)
-			move = append(move, [2]string{pathFrom, pathTo})
+	// 2. 尝试获取 to
+	toEntry, err := s.getEntry(to)
+	if err == nil {
+		// to 存在
+		if toEntry.mode&os.ModeDir != 0 {
+			// to 是目录，将 from 移动到这个目录下
+			to = filepath.Join(to, filepath.Base(from))
+		} else {
+			// to 是文件，报错
+			return fmt.Errorf("destination path %q already exists and is not a directory", to)
 		}
 	}
 
-	for _, ops := range move {
-		from := ops[0]
-		to := ops[1]
-
-		if err := s.move(from, to); err != nil {
-			return err
+	// 3. 获取 to 的父目录
+	toParentPath := filepath.Dir(to)
+	var toParentID int64
+	if toParentPath == string(separator) {
+		toParentID = 1 // root
+	} else {
+		toParentEntry, err := s.getEntry(toParentPath)
+		if err != nil {
+			return fmt.Errorf("destination parent directory %q does not exist", toParentPath)
 		}
+		if toParentEntry.mode&os.ModeDir == 0 {
+			return fmt.Errorf("destination parent path %q exists but is not a directory", toParentPath)
+		}
+		toParentID = toParentEntry.entryID
+	}
+
+	// 4. 修改 from 的 parent ID 和 name
+	tx := s.conn.Begin()
+	defer tx.Rollback()
+
+	stmt, _, err := s.conn.Prepare(`
+		UPDATE entries 
+		SET parent_id = ?, name = ?, modify_at = CURRENT_TIMESTAMP 
+		WHERE entry_id = ?
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare rename statement error: %v", err)
+	}
+	defer stmt.Close()
+
+	if err := stmt.BindInt64(1, toParentID); err != nil {
+		return fmt.Errorf("bind parent_id error: %v", err)
+	}
+	if err := stmt.BindText(2, filepath.Base(to)); err != nil {
+		return fmt.Errorf("bind name error: %v", err)
+	}
+	if err := stmt.BindInt64(3, fromEntry.entryID); err != nil {
+		return fmt.Errorf("bind entry_id error: %v", err)
+	}
+
+	if err := stmt.Exec(); err != nil {
+		return fmt.Errorf("execute rename error: %v", stmt.Err())
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction error: %v", err)
+	}
+
+	// 清理缓存
+	// 1. 清理源文件所在目录的 dirsCache（通过 parentID）
+	if fromEntry.parentID != 1 { // 不是根目录
+		s.dirsCache.Remove(fromEntry.parentID)
+	}
+
+	// 2. 清理目标目录的 dirsCache（通过 parentID）
+	if toParentID != 1 { // 不是根目录
+		s.dirsCache.Remove(toParentID)
+	}
+
+	// 3. 清理源文件在 entriesCache 中的缓存（通过 full_path）
+	s.entriesCache.Remove(from)
+
+	// 4. 如果源文件是目录，清理其 dirsCache
+	if fromEntry.mode&os.ModeDir != 0 {
+		s.dirsCache.Remove(fromEntry.entryID)
 	}
 
 	return nil
 }
 
+/*
 func (s *storage) move(from, to string) error {
 	if s.Has(to) {
 		return fmt.Errorf("file already exists %q", to)
@@ -277,6 +309,7 @@ func (s *storage) move(from, to string) error {
 	delete(s.files, from)
 	return nil
 }
+*/
 
 func (s *storage) Remove(path string) error {
 	path = clean(path)
