@@ -15,7 +15,7 @@ func cmdLs(dbName string, mirrorPath string, args []string) {
 
 	path := args[0]
 
-	fs, err := sqlfs.NewSQLiteFS(dbName)
+	_, fs, err := sqlfs.NewSQLiteFS(dbName)
 	if err != nil {
 		fmt.Printf("Failed to initialize SQLFS: %v\n", err)
 		os.Exit(1)

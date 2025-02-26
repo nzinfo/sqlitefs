@@ -16,11 +16,12 @@ func cmdMkdir(dbName string, mirrorPath string, args []string) {
 
 	dir := args[0]
 
-	fs, err := sqlfs.NewSQLiteFS(dbName)
+	sqlfs, fs, err := sqlfs.NewSQLiteFS(dbName)
 	if err != nil {
 		fmt.Printf("Failed to initialize SQLFS: %v\n", err)
 		os.Exit(1)
 	}
+	defer sqlfs.Close()
 
 	if err := fs.MkdirAll(dir, 0755); err != nil {
 		fmt.Printf("Failed to create directory: %v\n", err)

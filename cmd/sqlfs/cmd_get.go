@@ -19,11 +19,12 @@ func cmdGet(dbName string, mirrorPath string, args []string) {
 	src := args[0]
 	dst := args[1]
 
-	fs, err := sqlfs.NewSQLiteFS(dbName)
+	sqlfs, fs, err := sqlfs.NewSQLiteFS(dbName)
 	if err != nil {
 		fmt.Printf("Failed to initialize SQLFS: %v\n", err)
 		os.Exit(1)
 	}
+	defer sqlfs.Close()
 
 	srcFile, err := fs.Open(src)
 	if err != nil {

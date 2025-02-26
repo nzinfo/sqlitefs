@@ -19,6 +19,17 @@ import (
 
 const separator = filepath.Separator
 
+// Filesystem 实现了 billy.Filesystem 接口，并添加了 io.Closer 接口
+type Filesystem interface {
+	// billy.Filesystem all except Chroot
+	billy.Basic
+	billy.TempFile
+	billy.Dir
+	billy.Symlink
+	// io.Closer 接口方法
+	Close() error
+}
+
 // Memory a very convenient filesystem based on memory files.
 type SQLiteFS struct {
 	s         *storage
@@ -27,17 +38,17 @@ type SQLiteFS struct {
 }
 
 // New returns a new Memory filesystem.
-func NewSQLiteFS(dbName string) (billy.Filesystem, error) {
+func NewSQLiteFS(dbName string) (Filesystem, billy.Filesystem, error) {
 	s, err := newStorage(dbName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	fs := &SQLiteFS{
 		s:         s,
 		openFiles: make(map[EntryID]*file),
 	}
-
-	return chroot.New(fs, string(separator)), nil
+	//return fs, nil
+	return fs, chroot.New(fs, string(separator)), nil
 }
 
 func (fs *SQLiteFS) Create(filename string) (billy.File, error) {
