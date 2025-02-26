@@ -1,4 +1,4 @@
-//go:build proto
+////// //go:build proto
 
 package sqlfs
 
@@ -66,8 +66,8 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 	// Prepare statement for both directory and file creation
 	stmt, _, err := s.conn.Prepare(`
 		INSERT INTO entries (
-			entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, size, create_at, modify_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("prepare statement error: %v", err)
@@ -100,8 +100,11 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 		if err := stmt.BindInt64(7, 0); err != nil {
 			return nil, fmt.Errorf("bind gid error: %v", err)
 		}
-		if err := stmt.BindText(8, "[]"); err != nil { // Empty array for directory
+		if err := stmt.BindText(8, ""); err != nil {
 			return nil, fmt.Errorf("bind target error: %v", err)
+		}
+		if err := stmt.BindInt64(9, 0); err != nil { // 目录大小默认为 0
+			return nil, fmt.Errorf("bind size error: %v", err)
 		}
 
 		if !stmt.Step() {
@@ -139,6 +142,9 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 	}
 	if err := stmt.BindNull(8); err != nil { // NULL for regular file
 		return nil, fmt.Errorf("bind target error: %v", err)
+	}
+	if err := stmt.BindInt64(9, 0); err != nil { // 新建大小为 0
+		return nil, fmt.Errorf("bind size error: %v", err)
 	}
 
 	// fmt.Println("create file:", s.maxEntryID, path, name)
@@ -638,7 +644,7 @@ func (s *storage) deleteAllChunksInTx(tx *sqlite3.Conn, fileID EntryID) error {
 
 func (s *storage) loadEntriesByParentSync(parentID EntryID, parentPath string) ([]fileInfo, error) {
 	stmt, tail, err := s.conn.Prepare(`
-		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, create_at, modify_at
+		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, size,create_at, modify_at
 		FROM entries
 		WHERE parent_id = ?
 	`)
@@ -678,6 +684,7 @@ func (s *storage) loadEntriesByParentSync(parentID EntryID, parentPath string) (
 			uid:      int(stmt.ColumnInt64(5)),
 			gid:      int(stmt.ColumnInt64(6)),
 			target:   stmt.ColumnText(7),
+			size:     stmt.ColumnInt64(8),
 			createAt: createTime,
 			modTime:  modTime,
 		}

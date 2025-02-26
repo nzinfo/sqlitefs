@@ -100,15 +100,16 @@ type storage struct {
 	//children map[string]map[string]*file
 
 	/// 新增的与 SQLiteFS 相关的字段
-	// mu           sync.Mutex
-	conn         *sqlite3.Conn
-	connMutex    sync.RWMutex
-	entriesLock  sync.RWMutex
-	dirsLock     sync.RWMutex
+	conn      *sqlite3.Conn
+	connMutex sync.RWMutex
+	// entriesLock  sync.RWMutex
+	// dirsLock     sync.RWMutex
+	// LRU 缓存，这两个缓存都是线程安全的，不需要额外的锁
 	entriesCache *lru.Cache // LRU cache for file/directory information, full_path -> entryId.
 	dirsCache    *lru.Cache // LRU cache for directory information	entryId -> infoList.
 	rootEntry    *fileInfo
 	maxEntryID   EntryID
+	maxBlockID   BlockID
 
 	// 可能需要调整、重构，暂时先在此处。 仅针对 proto tag 有效。
 	writeBuffers []*WriteBuffer
@@ -133,6 +134,11 @@ func newStorage(dbName string) (*storage, error) {
 		conn.Close()
 		return nil, fmt.Errorf("failed to load max entry ID: %v", err)
 	}
+	maxBlockID, err := loadMaxBlockID(conn)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to load max block ID: %v", err)
+	}
 
 	s := &storage{
 		conn:         conn,
@@ -142,6 +148,7 @@ func newStorage(dbName string) (*storage, error) {
 		dirsCache:    lru.New(1024), // 添加 dirs 缓存初始化
 		rootEntry:    loadRootEntry(conn),
 		maxEntryID:   maxEntryID,
+		maxBlockID:   maxBlockID,
 	}
 
 	// 初始化条件变量
@@ -195,6 +202,7 @@ func loadRootEntry(conn *sqlite3.Conn) *fileInfo {
 		uid:      int(stmt.ColumnInt64(5)),
 		gid:      int(stmt.ColumnInt64(6)),
 		target:   stmt.ColumnText(7),
+		size:     int64(0),
 		createAt: createTime,
 		modTime:  modTime,
 	}
@@ -222,6 +230,28 @@ func loadMaxEntryID(conn *sqlite3.Conn) (EntryID, error) {
 	// Get the max entry_id
 	maxEntryID := EntryID(stmt.ColumnInt64(0))
 	return maxEntryID, nil
+}
+
+func loadMaxBlockID(conn *sqlite3.Conn) (BlockID, error) {
+	stmt, tail, err := conn.Prepare(`
+		SELECT MAX(block_id) FROM blocks
+	`)
+	if err != nil {
+		return 0, err
+	}
+	if tail != "" {
+		stmt.Close()
+		return 0, fmt.Errorf("prepare error: %v", tail)
+	}
+	defer stmt.Close()
+
+	if !stmt.Step() {
+		return 0, fmt.Errorf("step error: %v", stmt.Err())
+	}
+
+	// Get the max block_id
+	maxBlockID := BlockID(stmt.ColumnInt64(0))
+	return maxBlockID, nil
 }
 
 /////////////////////////////////////////////
@@ -528,29 +558,33 @@ func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) ([]BlockID, e
 	tx := s.conn.Begin()
 	defer tx.Rollback()
 
+	s.maxBlockID++ // 更新最大块ID
+	blockID := s.maxBlockID
+
+	// fmt.Println("flushBuffer:", blockID, len(data), len(chunks))
+
 	// 1. 写入 blocks 表
 	stmt, _, err := s.conn.Prepare(`
-		INSERT INTO blocks (data)
-		VALUES (?)
-		RETURNING id
+		INSERT INTO blocks (block_id, data)
+		VALUES (?, ?)
 	`)
 	if err != nil {
 		return nil, err
 	}
 	defer stmt.Close()
 
-	var blockID BlockID
-	if err := stmt.BindBlob(1, data); err != nil {
+	if err := stmt.BindInt64(1, int64(blockID)); err != nil {
+		return nil, err
+	}
+	if err := stmt.BindBlob(2, data); err != nil {
 		return nil, err
 	}
 	if err := stmt.Exec(); err != nil {
 		return nil, err
 	}
-	blockID = BlockID(s.conn.LastInsertRowID())
-
-	// 2. 写入 file_chunks 表
+	// 2. 写入 file_chunks 表， 暂时不启用 crc32
 	stmt, _, err = s.conn.Prepare(`
-		INSERT INTO file_chunks (file_id, offset, size, block_id, block_offset)
+		INSERT INTO file_chunks (entry_id, offset, size, block_id, block_offset)
 		VALUES (?, ?, ?, ?, ?)
 	`)
 	if err != nil {
@@ -574,10 +608,87 @@ func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) ([]BlockID, e
 		if err := stmt.BindInt64(5, int64(chunk.bufferOffset)); err != nil {
 			return nil, err
 		}
-		if err := stmt.Exec(); err != nil {
-			return nil, err
+		if stmt.Step(); stmt.Err() != nil {
+			return nil, stmt.Err()
 		}
 		stmt.Reset()
+	}
+
+	// 计算每个文件的最大大小
+	maxSizes := make(map[EntryID]int64)
+	for _, chunk := range chunks {
+		endOffset := chunk.offset + chunk.size
+		if current, exists := maxSizes[chunk.fileID]; !exists || endOffset > current {
+			maxSizes[chunk.fileID] = endOffset
+		}
+	}
+
+	// 创建临时表并插入数据
+	stmt, _, err = s.conn.Prepare(`
+		CREATE TEMP TABLE IF NOT EXISTS temp_file_sizes (
+			entry_id INTEGER PRIMARY KEY,
+			max_size INTEGER
+		)
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+	if err := stmt.Exec(); err != nil {
+		return nil, err
+	}
+
+	// 批量插入数据
+	stmt, _, err = s.conn.Prepare(`
+		INSERT INTO temp_file_sizes (entry_id, max_size)
+		VALUES (?, ?)
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	for entryID, maxSize := range maxSizes {
+		if err := stmt.BindInt64(1, int64(entryID)); err != nil {
+			return nil, err
+		}
+		if err := stmt.BindInt64(2, maxSize); err != nil {
+			return nil, err
+		}
+		if stmt.Step(); stmt.Err() != nil {
+			return nil, stmt.Err()
+		}
+		stmt.Reset()
+	}
+
+	fmt.Println("maxSizes:", maxSizes)
+
+	// 一次性更新所有需要更新的文件大小
+	stmt, _, err = s.conn.Prepare(`
+		UPDATE entries
+		SET size = temp_file_sizes.max_size
+		FROM temp_file_sizes
+		WHERE entries.entry_id = temp_file_sizes.entry_id
+		AND temp_file_sizes.max_size > entries.size
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	if err := stmt.Exec(); err != nil {
+		// fmt.Println("update sqlfs size:", stmt, stmt.Err())
+		return nil, err
+	}
+
+	// 清理临时表
+	stmt, _, err = s.conn.Prepare(`DELETE FROM temp_file_sizes`)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+	if err := stmt.Exec(); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {

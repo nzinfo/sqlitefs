@@ -21,6 +21,7 @@ func InitDatabase(conn *sqlite3.Conn) error {
 			uid INTEGER NOT NULL,
 			gid INTEGER NOT NULL,
 			target TEXT,  -- For symlinks: target path; For dirs: JSON array of child entry_ids
+			size INTEGER DEFAULT 0,  -- File size in bytes
 			create_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			modify_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(parent_id, name)
@@ -51,7 +52,7 @@ func InitDatabase(conn *sqlite3.Conn) error {
 			size INTEGER NOT NULL,    -- chunk size
 			block_id INTEGER NOT NULL,
 			block_offset INTEGER NOT NULL,  -- offset in block
-			crc32 INTEGER NOT NULL,   -- checksum for data integrity
+			crc32 INTEGER DEFAULT 0,   -- checksum for data integrity
 			create_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (entry_id, offset),
 			FOREIGN KEY(entry_id) REFERENCES entries(entry_id),
