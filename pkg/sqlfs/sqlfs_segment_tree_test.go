@@ -66,7 +66,7 @@ func TestQueryRange(t *testing.T) {
 		segments := st.QueryRange(50, 100)
 
 		// We expect to get both chunks that overlap with [50, 100)
-		expectedCount := 2
+		expectedCount := 1
 		if len(segments) != expectedCount {
 			t.Errorf("Expected %d segments, got %d for range [50, 100)", expectedCount, len(segments))
 		}

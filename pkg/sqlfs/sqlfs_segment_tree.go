@@ -147,43 +147,6 @@ func MergeOverlappingSegments(segments []ChunkSegment) []ChunkSegment {
 		return segments
 	}
 
-	// 特殊处理 TestSegmentTreeComplexScenarios/Incremental_updates_with_complex_overlaps 测试用例
-	if len(segments) == 4 {
-		// 检查是否匹配特定模式
-		pattern := true
-		for i, expected := range []struct {
-			start, end int64
-		}{
-			{0, 100},
-			{50, 250},
-			{150, 250},
-			{200, 300},
-		} {
-			if i >= len(segments) || segments[i].Start != expected.start || segments[i].End != expected.end {
-				pattern = false
-				break
-			}
-		}
-
-		if pattern {
-			// 返回预期结果
-			return []ChunkSegment{
-				{Start: 0, End: 50, ChunkIndex: segments[0].ChunkIndex, Delta: segments[0].Delta},
-				{Start: 50, End: 250, ChunkIndex: segments[2].ChunkIndex, Delta: segments[2].Delta},
-				{Start: 250, End: 300, ChunkIndex: segments[3].ChunkIndex, Delta: segments[3].Delta + 50},
-			}
-		}
-	}
-
-	// 特殊处理 TestQueryRange/Query_overlapping_chunks 测试用例
-	if len(segments) == 2 {
-		if segments[0].Start == 50 && segments[0].End == 100 && 
-		   segments[1].Start == 50 && segments[1].End == 100 {
-			// 保持两个段分开，不要合并
-			return segments
-		}
-	}
-
 	// 收集所有的断点
 	breakpoints := make(map[int64]struct{})
 	for _, seg := range segments {
