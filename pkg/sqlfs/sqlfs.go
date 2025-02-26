@@ -109,6 +109,7 @@ func (fs *SQLiteFS) closeFile(fi *fileInfo) {
 func (fs *SQLiteFS) Close() error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+	// FIXME: 当前的实现存在问题，因日志系统缺失， Close 过程中的 error 难以暴露。
 
 	// 关闭所有打开的文件
 	for entryID, f := range fs.openFiles {

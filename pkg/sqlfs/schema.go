@@ -38,8 +38,9 @@ func InitDatabase(conn *sqlite3.Conn) error {
 		`CREATE INDEX IF NOT EXISTS idx_file_tags ON file_tags(tag)`,
 
 		// Blocks table stores actual file content
+		// 不应该允许 自增 主健
 		`CREATE TABLE IF NOT EXISTS blocks (
-			block_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			block_id INTEGER PRIMARY KEY,
 			data BLOB NOT NULL
 		)`,
 

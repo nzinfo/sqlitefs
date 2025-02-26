@@ -385,12 +385,18 @@ func (s *storage) flushWorker() {
 	for range s.flushChan {
 		s.stateLock.RLock()
 		var buffersToFlush []*WriteBuffer
-		for _, buffer := range s.writeBuffers {
-			buffer.lock.RLock()
-			if buffer.state == bufferWriting && len(buffer.pending) > 0 {
-				buffersToFlush = append(buffersToFlush, buffer)
+		// 检查 writeBuffers 是否为 nil
+		if s.writeBuffers != nil {
+			for _, buffer := range s.writeBuffers {
+				if buffer == nil {
+					continue
+				}
+				buffer.lock.RLock()
+				if buffer.state == bufferWriting && len(buffer.pending) > 0 {
+					buffersToFlush = append(buffersToFlush, buffer)
+				}
+				buffer.lock.RUnlock()
 			}
-			buffer.lock.RUnlock()
 		}
 		s.stateLock.RUnlock()
 
@@ -431,22 +437,31 @@ func (s *storage) Flush() *AsyncResult[[]BlockID] {
 		// 获取所有需要刷新的缓冲区
 		var buffersToFlush []*WriteBuffer
 		s.stateLock.RLock()
-		for _, buffer := range s.writeBuffers {
-			buffer.lock.RLock()
-			if buffer.state == bufferWriting && len(buffer.pending) > 0 {
-				buffersToFlush = append(buffersToFlush, buffer)
+		// 检查 writeBuffers 是否为 nil
+		if s.writeBuffers != nil {
+			for _, buffer := range s.writeBuffers {
+				if buffer == nil {
+					continue
+				}
+				buffer.lock.RLock()
+				if buffer.state == bufferWriting && len(buffer.pending) > 0 {
+					buffersToFlush = append(buffersToFlush, buffer)
+				}
+				buffer.lock.RUnlock()
 			}
-			buffer.lock.RUnlock()
 		}
 		s.stateLock.RUnlock()
 
+		// fmt.Println("flushing buffers:", len(buffersToFlush))
 		// 刷新所有缓冲区
 		var blockIDs []BlockID
 		var flushErr error
 		for _, buffer := range buffersToFlush {
 			buffer.lock.Lock()
+			// fmt.Println("flushing buffer:", buffer.state, buffer.position, len(buffer.pending))
 			if len(buffer.pending) > 0 {
 				ids, err := s.flushBuffer(buffer.data[:buffer.position], buffer.pending)
+				fmt.Println("flushed buffer:", ids, err)
 				if err != nil {
 					flushErr = fmt.Errorf("flush buffer error: %v", err)
 					buffer.lock.Unlock()
