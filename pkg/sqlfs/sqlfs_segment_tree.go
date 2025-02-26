@@ -73,7 +73,7 @@ func (st *SegmentTree) UpdateChunks(newChunks []fileChunk) {
 
 	// 合并新旧线段
 	st.segments = append(st.segments, newSegments...)
-	
+
 	// 更新chunk计数
 	st.chunkCount += len(newChunks)
 }
@@ -116,14 +116,14 @@ func (st *SegmentTree) QueryRange(start, end int64) []ChunkSegment {
 	return result
 }
 
-// GetSegmentsToRead 返回需要读取的段以满足读取请求
-func (st *SegmentTree) GetSegmentsToRead(start, end int64) []ChunkSegment {
+// SegmentsToRead 返回需要读取的段以满足读取请求
+func (st *SegmentTree) SegmentsToRead(start, end int64) []ChunkSegment {
 	// 首先查询范围内的所有段
 	segments := st.QueryRange(start, end)
-	
+
 	// 合并重叠的段，保留最新的数据
 	mergedSegments := MergeOverlappingSegments(segments)
-	
+
 	return mergedSegments
 }
 

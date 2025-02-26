@@ -18,7 +18,7 @@ func TestGetEntry_Root(t *testing.T) {
 
 	// Patch LoadEntriesByParent to return a predefined entry for root
 	patches := gomonkey.ApplyFunc((*storage).LoadEntriesByParent,
-		func(_ *storage, parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
+		func(_ *storage, parentID EntryID, parentPath string) *AsyncResult[[]fileInfo] {
 			rs := NewAsyncResult[[]fileInfo]()
 			rs.Complete([]fileInfo{
 				{name: "file.txt", entryID: 2},
@@ -41,7 +41,7 @@ func TestGetEntry_Success(t *testing.T) {
 
 	// Patch LoadEntriesByParent to return the correct structure
 	patches := gomonkey.ApplyFunc((*storage).LoadEntriesByParent,
-		func(_ *storage, parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
+		func(_ *storage, parentID EntryID, parentPath string) *AsyncResult[[]fileInfo] {
 			var entries []fileInfo
 			switch parentID {
 			case 1: // Root directory
@@ -80,7 +80,7 @@ func TestGetEntry_NotFound(t *testing.T) {
 	}
 
 	patches := gomonkey.ApplyFunc((*storage).LoadEntriesByParent,
-		func(_ *storage, parentID int64, parentPath string) *AsyncResult[[]fileInfo] {
+		func(_ *storage, parentID EntryID, parentPath string) *AsyncResult[[]fileInfo] {
 			rs := NewAsyncResult[[]fileInfo]()
 			rs.Complete(nil, &ErrFileNotFound{Path: "/path/to/nonexistent.txt"})
 			return rs
@@ -100,13 +100,20 @@ func TestGetEntry_CacheHit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Pre-fill the cache
-	s.entriesCache.Add("/path/to/file.txt", &fileInfo{name: "file.txt", entryID: 1})
+	// 模拟缓存命中
+	s.entriesCache.Add("/path/to/file.txt", &fileInfo{
+		name:     "file.txt",
+		entryID:  4,
+		mode:     0,
+		fullPath: "/path/to/file.txt",
+	})
 
+	// 即使没有 mock LoadEntriesByParent，也应该能从缓存中获取
 	entry, err := s.getEntry("/path/to/file.txt")
 	assert.NoError(t, err)
 	assert.NotNil(t, entry)
 	assert.Equal(t, "file.txt", entry.name)
+	assert.Equal(t, EntryID(4), entry.entryID)
 }
 
 func TestGetEntry_WithDatabase(t *testing.T) {
@@ -149,7 +156,7 @@ func TestGetEntry_WithDatabase(t *testing.T) {
 	assert.NotNil(t, entry)
 	assert.Equal(t, "file.txt", entry.name)
 	assert.Equal(t, "/path/to/file.txt", entry.fullPath)
-	assert.Equal(t, int64(4), entry.entryID)
+	assert.Equal(t, EntryID(4), entry.entryID)
 
 	// 获取 /
 	entry, err = s.getEntry("/")
