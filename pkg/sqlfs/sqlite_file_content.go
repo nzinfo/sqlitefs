@@ -250,7 +250,7 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 	reqID := len(fc.chunks)
 	// 写入数据库
 	result := fs.s.FileWrite(fileID, int64(reqID), p, offset)
-	written, err := result.Wait()
+	rs, err := result.Wait()
 	if err != nil {
 		return 0, err
 	}
@@ -259,8 +259,8 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 	chunk := fileChunk{
 		offset:      offset,
 		size:        int64(len(p)),
-		blockID:     0,
-		blockOffset: 0,
+		blockID:     int64(rs.BlockID),
+		blockOffset: int64(rs.BlockOffset),
 	}
 
 	// 添加新chunk
@@ -274,5 +274,5 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 	}
 
 	// fc.buildSegmentTree()
-	return written, nil
+	return int(rs.BytesWritten), nil
 }

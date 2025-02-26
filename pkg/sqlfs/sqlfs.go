@@ -37,19 +37,11 @@ type SQLiteFS struct {
 	openFiles map[EntryID]*file
 
 	// 用于管理 chunk 更新的字段
-	updateMu       sync.Mutex
-	pendingUpdates map[EntryID]map[int64]ChunkUpdateInfo
-	updateTicker   *time.Ticker
-	updateDone     chan struct{}
+	// updateMu       sync.Mutex
+	// pendingUpdates map[EntryID]map[int64]ChunkUpdateInfo
+	// updateTicker   *time.Ticker
+	// updateDone     chan struct{}
 }
-
-const (
-	// DefaultBufferSize is the default size of the buffer
-	// DefaultBufferSize = 1024 * 1024 * 2 // 2MB
-
-	// updateInterval 是定期处理待更新 chunk 的时间间隔
-	updateInterval = 5 * time.Second
-)
 
 // New returns a new Memory filesystem.
 func NewSQLiteFS(dbName string) (Filesystem, billy.Filesystem, error) {
@@ -58,14 +50,14 @@ func NewSQLiteFS(dbName string) (Filesystem, billy.Filesystem, error) {
 		return nil, nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	fs := &SQLiteFS{
-		s:              s,
-		openFiles:      make(map[EntryID]*file),
-		pendingUpdates: make(map[EntryID]map[int64]ChunkUpdateInfo),
-		updateDone:     make(chan struct{}),
+		s:         s,
+		openFiles: make(map[EntryID]*file),
+		// pendingUpdates: make(map[EntryID]map[int64]ChunkUpdateInfo),
+		// updateDone:     make(chan struct{}),
 	}
 
 	// 启动更新处理器
-	fs.startChunkUpdateHandler()
+	// fs.startChunkUpdateHandler()
 
 	//return fs, nil
 	return fs, chroot.New(fs, string(separator)), nil
@@ -147,19 +139,22 @@ func (fs *SQLiteFS) Close() error {
 		return fmt.Errorf("failed to flush storage: %v", err)
 	}
 
-	// 等待所有未处理的更新完成
-	fs.waitForPendingUpdates()
+	/*
+		// 等待所有未处理的更新完成
+		fs.waitForPendingUpdates()
 
-	// 确保处理所有待处理的更新
-	fmt.Println("Close: 处理所有待处理的更新")
-	fs.processAllPendingUpdates()
+		// 确保处理所有待处理的更新
+		fmt.Println("Close: 处理所有待处理的更新")
+		fs.processAllPendingUpdates()
 
-	// 停止更新处理器
-	if fs.updateTicker != nil {
-		fmt.Println("Close: 停止更新处理器")
-		fs.updateTicker.Stop()
-		close(fs.updateDone)
-	}
+		// 停止更新处理器
+
+			if fs.updateTicker != nil {
+				fmt.Println("Close: 停止更新处理器")
+				fs.updateTicker.Stop()
+				close(fs.updateDone)
+			}
+	*/
 
 	// 关闭数据库连接
 	fmt.Println("Close: 关闭数据库连接")
@@ -377,6 +372,7 @@ type fileInfo struct {
 	modTime  time.Time   // Last modification time
 }
 
+/*
 // startChunkUpdateHandler 启动 chunk 更新处理器
 func (fs *SQLiteFS) startChunkUpdateHandler() {
 	fmt.Println("启动 chunk 更新处理器")
@@ -480,28 +476,29 @@ func (fs *SQLiteFS) waitForPendingUpdates() {
 	// 最多等待 500ms，确保所有更新都被处理
 	maxWait := 500 * time.Millisecond
 	start := time.Now()
-	
+
 	for {
 		// 检查是否有未处理的更新
 		fs.updateMu.Lock()
 		hasPending := len(fs.pendingUpdates) > 0
 		fs.updateMu.Unlock()
-		
+
 		if !hasPending {
 			fmt.Println("waitForPendingUpdates: 所有更新已处理完成")
 			return
 		}
-		
+
 		// 检查是否超时
 		if time.Since(start) > maxWait {
 			fmt.Printf("waitForPendingUpdates: 等待超时，仍有 %d 个文件的更新未处理\n", len(fs.pendingUpdates))
 			return
 		}
-		
+
 		// 处理一次所有待更新的 chunk
 		fs.processAllPendingUpdates()
-		
+
 		// 短暂休眠，避免 CPU 占用过高
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+*/

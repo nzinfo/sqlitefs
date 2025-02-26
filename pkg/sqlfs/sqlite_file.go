@@ -63,9 +63,9 @@ func (f *file) ReadAt(b []byte, off int64) (int, error) {
 	}
 
 	// 在读取之前，确保处理所有待更新的 chunk
-	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 在读取前处理所有待更新的 chunk\n",
-		f.Name(), f.fileInfo.entryID)
-	f.fs.processAllPendingUpdates()
+	//fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 在读取前处理所有待更新的 chunk\n",
+	//	f.Name(), f.fileInfo.entryID)
+	//f.fs.processAllPendingUpdates()
 
 	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 开始读取，偏移量=%d，长度=%d\n",
 		f.Name(), f.fileInfo.entryID, off, len(b))
@@ -123,9 +123,9 @@ func (f *file) WriteAt(p []byte, off int64) (int, error) {
 	}
 
 	// 写入完成后，处理所有待更新的 chunk
-	fmt.Printf("file.WriteAt: 文件 %s (ID=%d) 写入成功，长度=%d，处理所有待更新的 chunk\n",
-		f.Name(), f.fileInfo.entryID, n)
-	f.fs.processAllPendingUpdates()
+	//fmt.Printf("file.WriteAt: 文件 %s (ID=%d) 写入成功，长度=%d，处理所有待更新的 chunk\n",
+	//	f.Name(), f.fileInfo.entryID, n)
+	//f.fs.processAllPendingUpdates()
 
 	f.position = off + int64(n)
 	return n, nil
@@ -136,11 +136,8 @@ func (f *file) Close() error {
 		return os.ErrClosed
 	}
 
-	fmt.Printf("file.Close: 关闭文件 %s (ID=%d)，处理所有待更新的 chunk\n",
-		f.Name(), f.fileInfo.entryID)
-
 	// 在关闭文件前，确保处理所有待更新的 chunk
-	f.fs.processAllPendingUpdates()
+	// f.fs.processAllPendingUpdates()
 
 	f.fs.closeFile(f.fileInfo) // 通知文件系统文件关闭
 	f.fileInfo = nil
