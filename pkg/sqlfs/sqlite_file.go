@@ -2,6 +2,7 @@ package sqlfs
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -60,6 +61,9 @@ func (f *file) ReadAt(b []byte, off int64) (int, error) {
 	if !isReadAndWrite(f.flag) && !isReadOnly(f.flag) {
 		return 0, errors.New("read not supported")
 	}
+
+	// 在读取之前，确保处理所有待更新的 chunk
+	f.fs.processAllPendingUpdates()
 
 	result := f.fs.s.FileRead(f.fileInfo.entryID, b, off)
 	n, err := result.Wait()
@@ -158,4 +162,28 @@ func (f *file) Lock() error {
 // Unlock is a no-op in memfs.
 func (f *file) Unlock() error {
 	return nil
+}
+
+// updateChunks 更新文件内容中的 chunk 信息
+func (f *file) updateChunks(updates map[int64]ChunkUpdateInfo) {
+	if f.content == nil {
+		return
+	}
+
+	changed := false
+
+	// 遍历所有 chunks，查找匹配的 reqID 并更新
+	for i := range f.content.chunks {
+		reqID := int64(i)
+		if update, exists := updates[reqID]; exists {
+			f.content.chunks[i].blockID = update.BlockID
+			f.content.chunks[i].blockOffset = update.BlockOffset
+			changed = true
+		}
+	}
+	fmt.Printf("update chunks: %v\n", updates)
+	// 只有在确实有更新时才重建段树
+	if changed {
+		f.content.buildSegmentTree()
+	}
 }

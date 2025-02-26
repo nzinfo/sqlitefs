@@ -249,9 +249,9 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 	if len(p) == 0 {
 		return 0, nil
 	}
-
+	reqID := len(fc.chunks)
 	// 写入数据库
-	result := fs.s.FileWrite(fileID, p, offset)
+	result := fs.s.FileWrite(fileID, int64(reqID), p, offset)
 	written, err := result.Wait()
 	if err != nil {
 		return 0, err
@@ -259,8 +259,10 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 
 	// 更新内存中的数据
 	chunk := fileChunk{
-		offset: offset,
-		size:   int64(len(p)),
+		offset:      offset,
+		size:        int64(len(p)),
+		blockID:     0,
+		blockOffset: 0,
 	}
 
 	// 添加新chunk

@@ -35,6 +35,12 @@ type SQLiteFS struct {
 	s         *storage
 	mu        sync.Mutex
 	openFiles map[EntryID]*file
+
+	// 用于管理 chunk 更新的字段
+	updateMu       sync.Mutex
+	pendingUpdates map[EntryID]map[int64]ChunkUpdateInfo
+	updateTicker   *time.Ticker
+	updateDone     chan struct{}
 }
 
 // New returns a new Memory filesystem.
@@ -44,9 +50,16 @@ func NewSQLiteFS(dbName string) (Filesystem, billy.Filesystem, error) {
 		return nil, nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	fs := &SQLiteFS{
-		s:         s,
-		openFiles: make(map[EntryID]*file),
+		s:              s,
+		openFiles:      make(map[EntryID]*file),
+		pendingUpdates: make(map[EntryID]map[int64]ChunkUpdateInfo),
+		updateTicker:   time.NewTicker(100 * time.Millisecond), // 100ms 更新一次
+		updateDone:     make(chan struct{}),
 	}
+
+	// 启动更新处理器
+	fs.startChunkUpdateHandler()
+
 	//return fs, nil
 	return fs, chroot.New(fs, string(separator)), nil
 }
@@ -110,6 +123,12 @@ func (fs *SQLiteFS) Close() error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	// FIXME: 当前的实现存在问题，因日志系统缺失， Close 过程中的 error 难以暴露。
+
+	// 停止更新处理器
+	if fs.updateTicker != nil {
+		fs.updateTicker.Stop()
+		close(fs.updateDone)
+	}
 
 	// 关闭所有打开的文件
 	for entryID, f := range fs.openFiles {
@@ -337,4 +356,70 @@ type fileInfo struct {
 	size     int64       // File size
 	createAt time.Time   // Creation time
 	modTime  time.Time   // Last modification time
+}
+
+// startChunkUpdateHandler 启动一个 goroutine 处理 chunk 更新通知
+func (fs *SQLiteFS) startChunkUpdateHandler() {
+	go func() {
+		for {
+			select {
+			case <-fs.updateDone:
+				// 收到关闭信号，退出
+				return
+			case batch, ok := <-fs.s.chunkUpdateChan:
+				if !ok {
+					// 通道已关闭，退出
+					return
+				}
+				// 处理批量更新
+				fs.handleChunkUpdateBatch(batch)
+			case <-fs.updateTicker.C:
+				// 定时处理所有待更新的 chunk
+				fs.processAllPendingUpdates()
+			}
+		}
+	}()
+}
+
+// handleChunkUpdateBatch 处理批量更新通知
+func (fs *SQLiteFS) handleChunkUpdateBatch(batch ChunkUpdateBatch) {
+	fs.updateMu.Lock()
+	defer fs.updateMu.Unlock()
+
+	fmt.Printf("handleChunkUpdateBatch: %v\n", batch)
+
+	// 将更新添加到待处理列表
+	for fileID, updates := range batch.Updates {
+		if _, exists := fs.pendingUpdates[fileID]; !exists {
+			fs.pendingUpdates[fileID] = make(map[int64]ChunkUpdateInfo)
+		}
+
+		for reqID, info := range updates {
+			fs.pendingUpdates[fileID][reqID] = info
+		}
+	}
+}
+
+// processAllPendingUpdates 处理所有待更新的 chunk
+func (fs *SQLiteFS) processAllPendingUpdates() {
+	fs.updateMu.Lock()
+	defer fs.updateMu.Unlock()
+
+	if len(fs.pendingUpdates) == 0 {
+		return
+	}
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	// 处理每个文件的更新
+	for fileID, updates := range fs.pendingUpdates {
+		file, exists := fs.openFiles[fileID]
+		if exists && len(updates) > 0 {
+			file.updateChunks(updates)
+		}
+	}
+
+	// 清空待处理列表
+	fs.pendingUpdates = make(map[EntryID]map[int64]ChunkUpdateInfo)
 }

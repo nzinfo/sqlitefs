@@ -61,7 +61,7 @@ type StorageOps interface {
 
 	// 文件相关的操作
 	FileTruncate(fileID EntryID, size int64) *AsyncResult[error]
-	FileWrite(fileID EntryID, p []byte, offset int64) *AsyncResult[int]
+	FileWrite(fileID EntryID, reqID int64, p []byte, offset int64) *AsyncResult[int]
 	// buffer size / 需要读取的大小 由 p 给出， 返回实际写入的大小
 	FileRead(fileID EntryID, p []byte, offset int64) *AsyncResult[int]
 
@@ -94,7 +94,21 @@ type WriteBuffer struct {
 type PendingChunk struct {
 	fileChunk    // 继承基本字段
 	fileID       EntryID
-	bufferOffset int // 在缓冲区中的起始位置
+	reqID        int64 // 对于每一个 file ，每次 Open reqID 均不重复
+	bufferOffset int   // 在缓冲区中的起始位置
+}
+
+// ChunkUpdateInfo 存储 chunk 更新的信息
+type ChunkUpdateInfo struct {
+	FileID      EntryID
+	ReqID       int64
+	BlockID     int64
+	BlockOffset int64
+}
+
+// ChunkUpdateBatch 存储批量更新信息
+type ChunkUpdateBatch struct {
+	Updates map[EntryID]map[int64]ChunkUpdateInfo
 }
 
 type storage struct {
@@ -118,6 +132,9 @@ type storage struct {
 	bufferCond   *sync.Cond    // 用于等待可用缓冲区
 	stateLock    sync.RWMutex  // 仅用于状态变更
 	flushChan    chan struct{} // 触发刷新的通道
+
+	// 用于通知 chunk 更新的通道
+	chunkUpdateChan chan ChunkUpdateBatch
 }
 
 func newStorage(dbName string) (*storage, error) {
@@ -143,14 +160,15 @@ func newStorage(dbName string) (*storage, error) {
 	}
 
 	s := &storage{
-		conn:         conn,
-		writeBuffers: make([]*WriteBuffer, DefaultBufferNum),
-		flushChan:    make(chan struct{}, 1),
-		entriesCache: lru.New(1024), // 添加 entries 缓存初始化
-		dirsCache:    lru.New(1024), // 添加 dirs 缓存初始化
-		rootEntry:    loadRootEntry(conn),
-		maxEntryID:   maxEntryID,
-		maxBlockID:   maxBlockID,
+		conn:            conn,
+		writeBuffers:    make([]*WriteBuffer, DefaultBufferNum),
+		flushChan:       make(chan struct{}, 1),
+		entriesCache:    lru.New(1024), // 添加 entries 缓存初始化
+		dirsCache:       lru.New(1024), // 添加 dirs 缓存初始化
+		rootEntry:       loadRootEntry(conn),
+		maxEntryID:      maxEntryID,
+		maxBlockID:      maxBlockID,
+		chunkUpdateChan: make(chan ChunkUpdateBatch, 20), // 使用缓冲通道，避免阻塞
 	}
 
 	// 初始化条件变量
@@ -354,7 +372,7 @@ func (s *storage) getAvailableBuffer() (*WriteBuffer, int) {
 }
 
 // 写入操作
-func (s *storage) fileWriteSync(fileID EntryID, p []byte, offset int64) (int, error) {
+func (s *storage) fileWriteSync(fileID EntryID, reqID int64, p []byte, offset int64) (int, error) {
 	for {
 		buffer, _ := s.getAvailableBuffer()
 		if buffer == nil {
@@ -372,7 +390,7 @@ func (s *storage) fileWriteSync(fileID EntryID, p []byte, offset int64) (int, er
 		}
 
 		// 执行写入
-		writeSize := s.writeToBuffer(buffer, fileID, p, offset)
+		writeSize := s.writeToBuffer(buffer, fileID, reqID, p, offset)
 		buffer.lock.Unlock()
 
 		return int(writeSize), nil
@@ -380,7 +398,7 @@ func (s *storage) fileWriteSync(fileID EntryID, p []byte, offset int64) (int, er
 }
 
 // 写入到缓冲区
-func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, p []byte, offset int64) int64 {
+func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, reqID int64, p []byte, offset int64) int64 {
 	// buffer.lock 已在调用方加锁
 
 	remainSpace := int64(DefaultBufferSize - buffer.position)
@@ -396,6 +414,7 @@ func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, p []byte, o
 			size:   writeSize,
 		},
 		fileID:       fileID,
+		reqID:        reqID,
 		bufferOffset: buffer.position,
 	}
 	buffer.pending = append(buffer.pending, chunk)
@@ -616,12 +635,29 @@ func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) ([]BlockID, e
 		stmt.Reset()
 	}
 
-	// 计算每个文件的最大大小
+	// 计算每个文件的最大大小并同时构造批量更新通知
 	maxSizes := make(map[EntryID]int64)
+	updateBatch := ChunkUpdateBatch{
+		Updates: make(map[EntryID]map[int64]ChunkUpdateInfo),
+	}
+
 	for _, chunk := range chunks {
+		// 计算最大大小
 		endOffset := chunk.offset + chunk.size
 		if current, exists := maxSizes[chunk.fileID]; !exists || endOffset > current {
 			maxSizes[chunk.fileID] = endOffset
+		}
+		
+		// 添加更新信息
+		if _, exists := updateBatch.Updates[chunk.fileID]; !exists {
+			updateBatch.Updates[chunk.fileID] = make(map[int64]ChunkUpdateInfo)
+		}
+		
+		updateBatch.Updates[chunk.fileID][chunk.reqID] = ChunkUpdateInfo{
+			FileID:      chunk.fileID,
+			ReqID:       chunk.reqID,
+			BlockID:     int64(blockID),
+			BlockOffset: int64(chunk.bufferOffset),
 		}
 	}
 
@@ -695,6 +731,15 @@ func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) ([]BlockID, e
 
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+
+	// 非阻塞方式发送更新通知
+	select {
+	case s.chunkUpdateChan <- updateBatch:
+		// 成功发送
+	default:
+		// 通道已满，暂时忽略
+		// 可以考虑记录日志
 	}
 
 	return []BlockID{blockID}, nil
