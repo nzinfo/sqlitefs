@@ -493,7 +493,7 @@ func (s *storage) Flush() *AsyncResult[[]BlockID] {
 			// fmt.Println("flushing buffer:", buffer.state, buffer.position, len(buffer.pending))
 			if len(buffer.pending) > 0 {
 				ids, err := s.flushBuffer(buffer.data[:buffer.position], buffer.pending)
-				fmt.Println("flushed buffer:", ids, err)
+				// fmt.Println("flushed buffer:", ids, err)
 				if err != nil {
 					flushErr = fmt.Errorf("flush buffer error: %v", err)
 					buffer.lock.Unlock()
@@ -663,7 +663,7 @@ func (s *storage) flushBuffer(data []byte, chunks []*PendingChunk) ([]BlockID, e
 		stmt.Reset()
 	}
 
-	fmt.Println("maxSizes:", maxSizes)
+	// fmt.Println("maxSizes:", maxSizes)
 
 	// 一次性更新所有需要更新的文件大小
 	stmt, _, err = s.conn.Prepare(`

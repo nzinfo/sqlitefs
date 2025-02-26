@@ -2,7 +2,6 @@ package sqlfs
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -28,7 +27,6 @@ func OpenFile(fs *SQLiteFS, fileInfo *fileInfo, flag int, perm os.FileMode) (*fi
 		return nil, err
 	}
 
-	fmt.Println(chunks)
 	content := newFileContent(chunks)
 	return &file{
 		fs:       fs,
@@ -102,8 +100,7 @@ func (f *file) WriteAt(p []byte, off int64) (int, error) {
 	}
 
 	// 等待异步写入完成
-	result := f.fs.s.FileWrite(f.fileInfo.entryID, p, off)
-	n, err := result.Wait()
+	n, err := f.content.Write(f.fs, f.fileInfo.entryID, p, off)
 	if err != nil {
 		return 0, err
 	}
