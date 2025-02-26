@@ -485,6 +485,15 @@ func (s *storage) loadFileChunksSync(fileID EntryID) ([]fileChunk, error) {
 	return chunks, nil
 }
 
+func (s *storage) FileWrite(fileID EntryID, reqID int64, p []byte, offset int64) *AsyncResult[int] {
+	result := NewAsyncResult[int]()
+	go func() {
+		bytesWritten, err := s.fileWriteSync(fileID, reqID, p, offset)
+		result.Complete(bytesWritten, err)
+	}()
+	return result
+}
+
 func (s *storage) FileRead(fileID EntryID, p []byte, offset int64) *AsyncResult[int] {
 	// TODO: implement me
 	panic("implement me")
