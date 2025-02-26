@@ -433,13 +433,14 @@ func (s *storage) fileWriteSync(fileID EntryID, reqID int64, p []byte, offset in
 		}
 
 		// 执行写入
+		position := buffer.position
 		writeSize := s.writeToBuffer(buffer, fileID, reqID, p, offset)
 		buffer.lock.Unlock()
 
 		return WriteResult{
 			BytesWritten: int(writeSize),
 			BlockID:      buffer.blockID,
-			BlockOffset:  buffer.position,
+			BlockOffset:  position,
 		}, nil
 	}
 }

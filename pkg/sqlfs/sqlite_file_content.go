@@ -1,5 +1,7 @@
 package sqlfs
 
+import "fmt"
+
 // fileChunk represents a chunk of file data stored in the file_chunks table
 type fileChunk struct {
 	rowID       int64 // Primary key from file_chunks table, used for ordering
@@ -262,6 +264,9 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 		blockID:     int64(rs.BlockID),
 		blockOffset: int64(rs.BlockOffset),
 	}
+
+	fmt.Printf("Write: 写入的 chunk 为: offset=%d, size=%d, blockID=%d, blockOffset=%d\n",
+		chunk.offset, chunk.size, chunk.blockID, chunk.blockOffset)
 
 	// 添加新chunk
 	newIndex := len(fc.chunks)
