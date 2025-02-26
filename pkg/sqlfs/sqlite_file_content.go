@@ -169,7 +169,6 @@ func (fc *fileContent) findRangesInNode(node *segmentNode, start, end int64, ran
 	fc.findRangesInNode(node.left, start, end, ranges)
 	fc.findRangesInNode(node.right, start, end, ranges)
 }
-*/
 
 func max(a, b int64) int64 {
 	if a > b {
@@ -183,7 +182,7 @@ func min(a, b int64) int64 {
 		return a
 	}
 	return b
-}
+}*/
 
 // Len 返回文件内容的总长度
 func (fc *fileContent) Len() int64 {
