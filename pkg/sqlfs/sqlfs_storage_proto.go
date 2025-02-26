@@ -452,10 +452,10 @@ func (s *storage) LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk] {
 
 func (s *storage) loadFileChunksSync(fileID EntryID) ([]fileChunk, error) {
 	stmt, _, err := s.conn.Prepare(`
-		SELECT row_id, offset, size, block_id, block_offset
+		SELECT rowid, offset, size, block_id, block_offset
 		FROM file_chunks
-		WHERE file_id = ?
-		ORDER BY row_id ASC
+		WHERE entry_id = ?
+		ORDER BY rowid ASC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("prepare select chunks statement error: %v", err)
@@ -463,7 +463,7 @@ func (s *storage) loadFileChunksSync(fileID EntryID) ([]fileChunk, error) {
 	defer stmt.Close()
 
 	if err := stmt.BindInt64(1, int64(fileID)); err != nil {
-		return nil, fmt.Errorf("bind file_id error: %v", err)
+		return nil, fmt.Errorf("bind entry_id error: %v", err)
 	}
 
 	var chunks []fileChunk
@@ -492,6 +492,11 @@ func (s *storage) FileWrite(fileID EntryID, p []byte, offset int64) *AsyncResult
 		result.Complete(bytesWritten, err)
 	}()
 	return result
+}
+
+func (s *storage) FileRead(fileID EntryID, p []byte, offset int64) *AsyncResult[int] {
+	// TODO: implement me
+	panic("implement me")
 }
 
 /*
@@ -605,6 +610,8 @@ func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
 
 		result.Complete(nil, nil)
 	}()
+
+	// TODO: 还需要处理待写入的操作。
 
 	return result
 }

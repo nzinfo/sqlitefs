@@ -62,6 +62,8 @@ type StorageOps interface {
 	// 文件相关的操作
 	FileTruncate(fileID EntryID, size int64) *AsyncResult[error]
 	FileWrite(fileID EntryID, p []byte, offset int64) *AsyncResult[int]
+	// buffer size / 需要读取的大小 由 p 给出， 返回实际写入的大小
+	FileRead(fileID EntryID, p []byte, offset int64) *AsyncResult[int]
 
 	// 写入到数据块
 	Flush() *AsyncResult[[]BlockID]

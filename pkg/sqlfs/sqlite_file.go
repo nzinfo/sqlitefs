@@ -2,6 +2,7 @@ package sqlfs
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -16,15 +17,25 @@ type file struct {
 	flag     int
 	mode     os.FileMode
 	position int64
-	content  fileContent
+	content  *fileContent
 }
 
 func OpenFile(fs *SQLiteFS, fileInfo *fileInfo, flag int, perm os.FileMode) (*file, error) {
+	// 需要加载 Chunks, 然后构造 Content
+	result := fs.s.LoadFileChunks(fileInfo.entryID)
+	chunks, err := result.Wait()
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println(chunks)
+	content := newFileContent(chunks)
 	return &file{
 		fs:       fs,
 		fileInfo: fileInfo,
 		flag:     flag,
 		mode:     perm,
+		content:  content,
 	}, nil
 }
 
@@ -52,10 +63,12 @@ func (f *file) ReadAt(b []byte, off int64) (int, error) {
 		return 0, errors.New("read not supported")
 	}
 
-	return 0, nil
-	//n, err := f.content.ReadAt(b, off)
-
-	//return n, err
+	result := f.fs.s.FileRead(f.fileInfo.entryID, b, off)
+	n, err := result.Wait()
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (f *file) Seek(offset int64, whence int) (int64, error) {
