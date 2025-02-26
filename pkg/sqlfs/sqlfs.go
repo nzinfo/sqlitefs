@@ -124,7 +124,6 @@ func (fs *SQLiteFS) Close() error {
 	// FIXME: 当前的实现存在问题，因日志系统缺失， Close 过程中的 error 难以暴露。
 
 	// 关闭所有打开的文件
-	fmt.Println("Close: 关闭所有打开的文件")
 	for entryID, f := range fs.openFiles {
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("failed to close file: %v", err)

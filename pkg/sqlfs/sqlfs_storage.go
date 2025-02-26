@@ -136,8 +136,6 @@ type storage struct {
 	stateLock        sync.RWMutex  // 仅用于状态变更
 	flushChan        chan struct{} // 触发刷新的通道
 
-	// 用于通知 chunk 更新的通道
-	chunkUpdateChan chan ChunkUpdateBatch
 }
 
 func newStorage(dbName string) (*storage, error) {
@@ -172,7 +170,6 @@ func newStorage(dbName string) (*storage, error) {
 		rootEntry:        loadRootEntry(conn),
 		maxEntryID:       maxEntryID,
 		maxBlockID:       maxBlockID,
-		chunkUpdateChan:  make(chan ChunkUpdateBatch, 20), // 使用缓冲通道，避免阻塞
 	}
 
 	// 初始化条件变量
@@ -548,7 +545,6 @@ func (s *storage) flushWorker() {
 // Flush 将所有缓冲区的数据刷新到数据库
 func (s *storage) Flush() *AsyncResult[[]BlockID] {
 	result := NewAsyncResult[[]BlockID]()
-	fmt.Println("Flush: 开始执行")
 
 	go func() {
 		// 获取所有需要刷新的缓冲区
@@ -613,14 +609,6 @@ func (s *storage) Flush() *AsyncResult[[]BlockID] {
 func (s *storage) Close() error {
 	s.connMutex.Lock()
 	defer s.connMutex.Unlock()
-
-	// 等待一段时间，确保所有更新通知被处理
-	fmt.Println("storage: 等待更新通知处理完成")
-	time.Sleep(100 * time.Millisecond)
-
-	// 关闭 chunk 更新通道
-	close(s.chunkUpdateChan)
-	fmt.Println("storage: 关闭 chunk 更新通道")
 
 	if s.conn != nil {
 		if err := s.conn.Close(); err != nil {
@@ -821,17 +809,6 @@ func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChu
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-
-	// 非阻塞方式发送更新通知
-	select {
-	case s.chunkUpdateChan <- updateBatch:
-		fmt.Printf("发送更新通知: fileIDs=%v, 批次大小=%d\n", getMapKeys(updateBatch.Updates), len(updateBatch.Updates))
-		fmt.Println("更新通知已成功发送到通道")
-	default:
-		fmt.Printf("警告: 通道已满，无法发送更新通知，fileIDs=%v\n", getMapKeys(updateBatch.Updates))
-	}
-
-	fmt.Println("flushBuffer 执行完成")
 	return nil
 }
 
