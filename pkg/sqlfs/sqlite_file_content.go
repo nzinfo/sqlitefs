@@ -1,9 +1,5 @@
 package sqlfs
 
-import (
-	"sort"
-)
-
 // fileChunk represents a chunk of file data stored in the file_chunks table
 type fileChunk struct {
 	rowID       int64 // Primary key from file_chunks table, used for ordering
@@ -16,11 +12,12 @@ type fileChunk struct {
 
 // fileContent manages file chunks using a segment tree for efficient range queries
 type fileContent struct {
-	chunks        []fileChunk // Sorted by offset
-	tree          *segmentTree
+	chunks []fileChunk // Sorted by offset
+	// tree          *segmentTree
 	endChunkIndex int // 记录 offset + size 最大的 chunk 的索引
 }
 
+/*
 // segmentTree implements an interval tree for chunk management
 type segmentTree struct {
 	root *segmentNode
@@ -32,22 +29,20 @@ type segmentNode struct {
 	left       *segmentNode
 	right      *segmentNode
 }
+*/
 
 // newFileContent creates a new fileContent from a slice of chunks
 func newFileContent(chunks []fileChunk) *fileContent {
-	// Sort chunks by offset to ensure proper ordering
-	sort.Slice(chunks, func(i, j int) bool {
-		return chunks[i].offset < chunks[j].offset
-	})
-
+	// 不可对 chunk 排序，因为加载时严格按时间顺序加载的
 	fc := &fileContent{
 		chunks: chunks,
 	}
-	fc.buildSegmentTree()
+	// fc.buildSegmentTree()
 	fc.updateMaxEndChunkIndex()
 	return fc
 }
 
+/*
 // buildSegmentTree constructs the segment tree from sorted chunks
 func (fc *fileContent) buildSegmentTree() {
 	if len(fc.chunks) == 0 {
@@ -86,6 +81,7 @@ func (fc *fileContent) buildTreeNode(start, end int) *segmentNode {
 
 	return node
 }
+*/
 
 // updateMaxEndChunkIndex 更新 maxEndChunkIndex
 func (fc *fileContent) updateMaxEndChunkIndex() {
@@ -108,6 +104,7 @@ func (fc *fileContent) updateMaxEndChunkIndex() {
 	fc.endChunkIndex = maxIndex
 }
 
+/*
 // findChunkAt finds the chunk containing the given position
 func (fc *fileContent) findChunkAt(position int64) *fileChunk {
 	if fc.tree == nil || fc.tree.root == nil {
@@ -170,6 +167,7 @@ func (fc *fileContent) findRangesInNode(node *segmentNode, start, end int64, ran
 	fc.findRangesInNode(node.left, start, end, ranges)
 	fc.findRangesInNode(node.right, start, end, ranges)
 }
+*/
 
 func max(a, b int64) int64 {
 	if a > b {
@@ -212,7 +210,7 @@ func (fc *fileContent) Truncate(fs *SQLiteFS, fileID EntryID, size int64) error 
 	if size == 0 {
 		// 清空所有 chunks
 		fc.chunks = nil
-		fc.tree = nil
+		//fc.tree = nil
 		fc.endChunkIndex = -1
 		return nil
 	}
@@ -238,7 +236,7 @@ func (fc *fileContent) Truncate(fs *SQLiteFS, fileID EntryID, size int64) error 
 
 	// 3. 更新 chunks 并重建线段树
 	fc.chunks = newChunks
-	fc.buildSegmentTree()
+	// fc.buildSegmentTree()
 	fc.updateMaxEndChunkIndex()
 
 	return nil
@@ -275,6 +273,6 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 		fc.endChunkIndex = newIndex
 	}
 
-	fc.buildSegmentTree()
+	// fc.buildSegmentTree()
 	return written, nil
 }

@@ -63,20 +63,20 @@ func (f *file) ReadAt(b []byte, off int64) (int, error) {
 	}
 
 	// 在读取之前，确保处理所有待更新的 chunk
-	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 在读取前处理所有待更新的 chunk\n", 
+	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 在读取前处理所有待更新的 chunk\n",
 		f.Name(), f.fileInfo.entryID)
 	f.fs.processAllPendingUpdates()
 
-	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 开始读取，偏移量=%d，长度=%d\n", 
+	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 开始读取，偏移量=%d，长度=%d\n",
 		f.Name(), f.fileInfo.entryID, off, len(b))
 	result := f.fs.s.FileRead(f.fileInfo.entryID, b, off)
 	n, err := result.Wait()
 	if err != nil {
-		fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 读取失败: %v\n", 
+		fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 读取失败: %v\n",
 			f.Name(), f.fileInfo.entryID, err)
 		return 0, err
 	}
-	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 读取成功，实际读取长度=%d\n", 
+	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 读取成功，实际读取长度=%d\n",
 		f.Name(), f.fileInfo.entryID, n)
 	return n, nil
 }
@@ -111,19 +111,19 @@ func (f *file) WriteAt(p []byte, off int64) (int, error) {
 		return 0, errors.New("write not supported")
 	}
 
-	fmt.Printf("file.WriteAt: 文件 %s (ID=%d) 开始写入，偏移量=%d，长度=%d\n", 
+	fmt.Printf("file.WriteAt: 文件 %s (ID=%d) 开始写入，偏移量=%d，长度=%d\n",
 		f.Name(), f.fileInfo.entryID, off, len(p))
-	
+
 	// 等待异步写入完成
 	n, err := f.content.Write(f.fs, f.fileInfo.entryID, p, off)
 	if err != nil {
-		fmt.Printf("file.WriteAt: 文件 %s (ID=%d) 写入失败: %v\n", 
+		fmt.Printf("file.WriteAt: 文件 %s (ID=%d) 写入失败: %v\n",
 			f.Name(), f.fileInfo.entryID, err)
 		return 0, err
 	}
 
 	// 写入完成后，处理所有待更新的 chunk
-	fmt.Printf("file.WriteAt: 文件 %s (ID=%d) 写入成功，长度=%d，处理所有待更新的 chunk\n", 
+	fmt.Printf("file.WriteAt: 文件 %s (ID=%d) 写入成功，长度=%d，处理所有待更新的 chunk\n",
 		f.Name(), f.fileInfo.entryID, n)
 	f.fs.processAllPendingUpdates()
 
@@ -136,9 +136,9 @@ func (f *file) Close() error {
 		return os.ErrClosed
 	}
 
-	fmt.Printf("file.Close: 关闭文件 %s (ID=%d)，处理所有待更新的 chunk\n", 
+	fmt.Printf("file.Close: 关闭文件 %s (ID=%d)，处理所有待更新的 chunk\n",
 		f.Name(), f.fileInfo.entryID)
-	
+
 	// 在关闭文件前，确保处理所有待更新的 chunk
 	f.fs.processAllPendingUpdates()
 
@@ -190,11 +190,11 @@ func (f *file) Unlock() error {
 
 // updateChunks 更新文件内容中的 chunk 信息
 func (f *file) updateChunks(updates map[int64]ChunkUpdateInfo) {
-	fmt.Printf("file.updateChunks: 文件 %s (ID=%d) 开始更新 %d 个 chunks\n", 
+	fmt.Printf("file.updateChunks: 文件 %s (ID=%d) 开始更新 %d 个 chunks\n",
 		f.Name(), f.fileInfo.entryID, len(updates))
-	
+
 	if f.content == nil {
-		fmt.Printf("file.updateChunks: 文件 %s (ID=%d) 的 content 为 nil，跳过更新\n", 
+		fmt.Printf("file.updateChunks: 文件 %s (ID=%d) 的 content 为 nil，跳过更新\n",
 			f.Name(), f.fileInfo.entryID)
 		return
 	}
@@ -205,10 +205,10 @@ func (f *file) updateChunks(updates map[int64]ChunkUpdateInfo) {
 	for i := range f.content.chunks {
 		reqID := int64(i)
 		if update, exists := updates[reqID]; exists {
-			fmt.Printf("file.updateChunks: 更新 chunk[%d]: blockID 从 %d 更新到 %d, blockOffset 从 %d 更新到 %d\n", 
-				i, f.content.chunks[i].blockID, update.BlockID, 
+			fmt.Printf("file.updateChunks: 更新 chunk[%d]: blockID 从 %d 更新到 %d, blockOffset 从 %d 更新到 %d\n",
+				i, f.content.chunks[i].blockID, update.BlockID,
 				f.content.chunks[i].blockOffset, update.BlockOffset)
-			
+
 			f.content.chunks[i].blockID = update.BlockID
 			f.content.chunks[i].blockOffset = update.BlockOffset
 			changed = true
@@ -217,11 +217,11 @@ func (f *file) updateChunks(updates map[int64]ChunkUpdateInfo) {
 
 	// 只有在确实有更新时才重建段树
 	if changed {
-		fmt.Printf("file.updateChunks: 文件 %s (ID=%d) 有更新，重建段树\n", 
+		fmt.Printf("file.updateChunks: 文件 %s (ID=%d) 有更新，重建段树\n",
 			f.Name(), f.fileInfo.entryID)
-		f.content.buildSegmentTree()
+		// f.content.buildSegmentTree()
 	} else {
-		fmt.Printf("file.updateChunks: 文件 %s (ID=%d) 没有实际更新\n", 
+		fmt.Printf("file.updateChunks: 文件 %s (ID=%d) 没有实际更新\n",
 			f.Name(), f.fileInfo.entryID)
 	}
 }
