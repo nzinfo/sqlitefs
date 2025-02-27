@@ -725,7 +725,19 @@ func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChu
 	if err := stmt.Exec(); err != nil {
 		return err
 	}
-	// 2. 写入 file_chunks 表， 暂时不启用 crc32
+
+	// 2. 计算每个文件的最大大小
+	// 合并连续的chunk: 如果前后chunks中两个 chunk 的 entryID 相同，
+	//		且 前一个 offset + size 正好是下一个的 offset 则合并
+	maxSizes := make(map[EntryID]int64)
+	for _, chunk := range chunks {
+		// 计算最大大小
+		endOffset := chunk.offset + chunk.size
+		if current, exists := maxSizes[chunk.fileID]; !exists || endOffset > current {
+			maxSizes[chunk.fileID] = endOffset
+		}
+	}
+	// 3. 写入 file_chunks 表， 暂时不启用 crc32
 	stmt, _, err = s.conn.Prepare(`
 		INSERT INTO file_chunks (entry_id, offset, size, block_id, block_offset)
 		VALUES (?, ?, ?, ?, ?)
@@ -755,32 +767,6 @@ func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChu
 			return stmt.Err()
 		}
 		stmt.Reset()
-	}
-
-	// 计算每个文件的最大大小并同时构造批量更新通知
-	maxSizes := make(map[EntryID]int64)
-	updateBatch := ChunkUpdateBatch{
-		Updates: make(map[EntryID]map[int64]ChunkUpdateInfo),
-	}
-
-	for _, chunk := range chunks {
-		// 计算最大大小
-		endOffset := chunk.offset + chunk.size
-		if current, exists := maxSizes[chunk.fileID]; !exists || endOffset > current {
-			maxSizes[chunk.fileID] = endOffset
-		}
-
-		// 添加更新信息
-		if _, exists := updateBatch.Updates[chunk.fileID]; !exists {
-			updateBatch.Updates[chunk.fileID] = make(map[int64]ChunkUpdateInfo)
-		}
-
-		updateBatch.Updates[chunk.fileID][chunk.reqID] = ChunkUpdateInfo{
-			FileID:      chunk.fileID,
-			ReqID:       chunk.reqID,
-			BlockID:     int64(blockID),
-			BlockOffset: int64(chunk.bufferOffset),
-		}
 	}
 
 	// 创建临时表并插入数据

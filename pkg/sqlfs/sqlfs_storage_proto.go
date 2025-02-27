@@ -379,57 +379,6 @@ func (s *storage) Remove(path string) error {
 	return nil
 }
 
-/////////////////////////////
-/*
-func (c *content) WriteAt(p []byte, off int64) (int, error) {
-	if off < 0 {
-		return 0, &os.PathError{
-			Op:   "writeat",
-			Path: c.name,
-			Err:  fmt.Errorf("negative offset"),
-		}
-	}
-
-	c.m.Lock()
-	defer c.m.Unlock()
-
-	prev := len(c.bytes)
-
-	diff := int(off) - prev
-	if diff > 0 {
-		c.bytes = append(c.bytes, make([]byte, diff)...)
-	}
-
-	c.bytes = append(c.bytes[:off], p...)
-	return len(p), nil
-}
-
-func (c *content) ReadAt(b []byte, off int64) (n int, err error) {
-	if off < 0 {
-		return 0, &os.PathError{
-			Op:   "readat",
-			Path: c.name,
-			Err:  fmt.Errorf("negative offset"),
-		}
-	}
-
-	c.m.RLock()
-	defer c.m.RUnlock()
-
-	size := int64(len(c.bytes))
-	if off >= size {
-		return 0, io.EOF
-	}
-
-	l := int64(len(b))
-	if off+l > size {
-		l = size - off
-	}
-
-	n = copy(b, c.bytes[off:off+l])
-	return
-}
-*/
 func (s *storage) LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk] {
 	result := NewAsyncResult[[]fileChunk]()
 
