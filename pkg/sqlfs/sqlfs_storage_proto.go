@@ -59,9 +59,9 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 		current = filepath.Dir(current)
 	}
 
-	// Begin transaction
-	tx := s.conn.Begin()
-	defer tx.Rollback()
+	// Begin transaction 代码中不启用事务
+	// tx := s.conn.Begin()
+	// defer tx.Rollback()
 
 	// Prepare statement for both directory and file creation
 	stmt, _, err := s.conn.Prepare(`
@@ -152,9 +152,9 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 		return nil, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit transaction error: %v", err)
-	}
+	// if err := tx.Commit(); err != nil {
+	// 	return nil, fmt.Errorf("commit transaction error: %v", err)
+	// }
 	/*
 		{
 			stmt, _, err := s.conn.Prepare(`SELECT entry_id, parent_id, name FROM entries Where parent_id = ?`)
@@ -276,8 +276,8 @@ func (s *storage) Rename(from, to string) error {
 	}
 
 	// 4. 修改 from 的 parent ID 和 name
-	tx := s.conn.Begin()
-	defer tx.Rollback()
+	// tx := s.conn.Begin()
+	// defer tx.Rollback()
 
 	stmt, _, err := s.conn.Prepare(`
 		UPDATE entries 
@@ -303,9 +303,9 @@ func (s *storage) Rename(from, to string) error {
 		return fmt.Errorf("execute rename error: %v", stmt.Err())
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction error: %v", err)
-	}
+	// if err := tx.Commit(); err != nil {
+	// 	return fmt.Errorf("commit transaction error: %v", err)
+	// }
 
 	// 清理缓存
 	// 1. 清理源文件所在目录的 dirsCache（通过 parentID）
@@ -348,8 +348,8 @@ func (s *storage) Remove(path string) error {
 	}
 
 	// 开始事务删除
-	tx := s.conn.Begin()
-	defer tx.Rollback()
+	// tx := s.conn.Begin()
+	// defer tx.Rollback()
 
 	stmt, _, err := s.conn.Prepare(`
 		DELETE FROM entries 
@@ -368,9 +368,9 @@ func (s *storage) Remove(path string) error {
 		return fmt.Errorf("execute delete error: %v", stmt.Err())
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction error: %v", err)
-	}
+	// if err := tx.Commit(); err != nil {
+	// 	return fmt.Errorf("commit transaction error: %v", err)
+	// }
 
 	// 清理缓存
 	// 1. 清理被删除项在 entriesCache 中的缓存
@@ -562,8 +562,8 @@ func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
 	result := NewAsyncResult[error]()
 
 	go func() {
-		tx := s.conn.Begin()
-		defer tx.Rollback()
+		// tx := s.conn.Begin()
+		// defer tx.Rollback()
 
 		if size == 0 {
 			// 特殊处理：删除所有chunks
@@ -635,10 +635,10 @@ func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
 			}
 		}
 
-		if err := tx.Commit(); err != nil {
-			result.Complete(nil, fmt.Errorf("commit transaction error: %v", err))
-			return
-		}
+		// if err := tx.Commit(); err != nil {
+		// 	result.Complete(nil, fmt.Errorf("commit transaction error: %v", err))
+		// 	return
+		// }
 
 		result.Complete(nil, nil)
 	}()
@@ -646,18 +646,6 @@ func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
 	// TODO: 还需要处理待写入的操作。
 
 	return result
-}
-
-func (s *storage) deleteAllChunks(fileID EntryID) error {
-	tx := s.conn.Begin()
-	defer tx.Rollback()
-
-	err := s.deleteAllChunksInTx(s.conn, fileID)
-	if err != nil {
-		return err
-	}
-
-	return tx.Commit()
 }
 
 func (s *storage) deleteAllChunksInTx(tx *sqlite3.Conn, fileID EntryID) error {
