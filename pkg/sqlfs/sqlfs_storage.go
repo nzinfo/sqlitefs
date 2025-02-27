@@ -3,7 +3,6 @@ package sqlfs
 import (
 	"fmt"
 	"io/fs"
-	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -135,12 +134,19 @@ type storage struct {
 
 	// 可能需要调整、重构，暂时先在此处。 仅针对 proto tag 有效。
 	writeBuffers     []*WriteBuffer
-	writeBufferIndex int           // 记录当前使用的 Buffer
-	bufferCond       *sync.Cond    // 用于等待可用缓冲区
-	stateLock        sync.RWMutex  // 仅用于状态变更
-	flushChan        chan struct{} // 触发刷新的通道
-
+	writeBufferIndex int              // 记录当前使用的 Buffer
+	bufferCond       *sync.Cond       // 用于等待可用缓冲区
+	stateLock        sync.RWMutex     // 仅用于状态变更
+	controlChan      chan flushSignal // 控制通道，用于刷新和停止信号
+	workerDone       chan struct{}    // flushWorker 停止完成
 }
+
+type flushSignal int
+
+const (
+	signalFlush flushSignal = iota
+	signalStop
+)
 
 func newStorage(dbName string) (*storage, error) {
 	conn, err := sqlite3.Open(dbName)
@@ -168,7 +174,8 @@ func newStorage(dbName string) (*storage, error) {
 		conn:             conn,
 		writeBuffers:     make([]*WriteBuffer, DefaultBufferNum),
 		writeBufferIndex: 0, // 检查缓冲区时，最先检查是否可用的位置，实际需要  % DefaultBufferNum
-		flushChan:        make(chan struct{}, 1),
+		controlChan:      make(chan flushSignal, 1),
+		workerDone:       make(chan struct{}),
 		entriesCache:     lru.New(1024), // 添加 entries 缓存初始化
 		dirsCache:        lru.New(1024), // 添加 dirs 缓存初始化
 		blockCache:       lru.New(8),    // 添加 blocks 缓存初始化
@@ -507,56 +514,58 @@ func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, reqID int64
 
 // flushWorker 在后台运行，处理缓冲区刷新
 func (s *storage) flushWorker() {
-	// fmt.Println("flushWorker 启动")
-	for range s.flushChan {
-		fmt.Println("flushWorker 收到刷新信号")
-		s.stateLock.RLock()
-		var buffersToFlush []*WriteBuffer
-		// 检查 writeBuffers 是否为 nil
-		if s.writeBuffers != nil {
-			for _, buffer := range s.writeBuffers {
-				if buffer == nil {
-					continue
-				}
-				buffer.lock.RLock()
-				if buffer.state == bufferFull && len(buffer.pending) > 0 {
-					buffersToFlush = append(buffersToFlush, buffer)
-				}
-				buffer.lock.RUnlock()
-				fmt.Println("Buffer", buffer.blockID, len(buffer.pending), buffer.state, buffer.position)
-			}
+	defer close(s.workerDone)
+
+	for {
+		signal := <-s.controlChan
+		switch signal {
+		case signalStop:
+			fmt.Println("flushWorker 收到停止信号")
+			// 在退出前执行最后一次刷新
+			s.doFlush()
+			return
+
+		case signalFlush:
+			fmt.Println("flushWorker 收到刷新信号")
+			s.doFlush()
 		}
-		s.stateLock.RUnlock()
+	}
+}
 
-		fmt.Printf("flushWorker 找到 %d 个需要刷新的缓冲区\n", len(buffersToFlush))
-		for _, buffer := range buffersToFlush {
-			// buffer.lock.Lock()
-			// if buffer.state != bufferFull || len(buffer.pending) == 0 {
-			//	buffer.lock.Unlock()
-			//	continue
-			// }
-
-			// 复制数据以便解锁 // 不需要复制数据
-			// data := make([]byte, buffer.position)
-			// copy(data, buffer.data[:buffer.position])
-			// pendingChunks := make([]*PendingChunk, len(buffer.pending))
-			// copy(pendingChunks, buffer.pending)
-			// buffer.lock.Unlock()
-
-			fmt.Printf("flushWorker 准备刷新缓冲区: BlockID=%d, Block数据大小=%d, chunks数量=%d\n", buffer.blockID, buffer.position, len(buffer.pending))
-			// 执行实际的刷新操作
-			err := s.flushBuffer(buffer.blockID, buffer.data[:buffer.position], buffer.pending)
-			if err == nil {
-				buffer.lock.Lock()
-				buffer.position = 0
-				buffer.pending = buffer.pending[:0]
-				buffer.state = bufferEmpty
-				buffer.lock.Unlock()
-				fmt.Println("flushWorker 成功刷新缓冲区")
-			} else {
-				log.Printf("Error flushing buffer: %v", err)
-				fmt.Printf("flushWorker 刷新缓冲区失败: %v\n", err)
+// doFlush 执行实际的刷新操作
+func (s *storage) doFlush() {
+	var buffersToFlush []*WriteBuffer
+	s.stateLock.RLock()
+	if s.writeBuffers != nil {
+		for _, buffer := range s.writeBuffers {
+			if buffer == nil {
+				continue
 			}
+			buffer.lock.RLock()
+			if buffer.state == bufferFull && len(buffer.pending) > 0 {
+				buffersToFlush = append(buffersToFlush, buffer)
+			}
+			buffer.lock.RUnlock()
+			fmt.Println("Buffer", buffer.blockID, len(buffer.pending), buffer.state, buffer.position)
+		}
+	}
+	s.stateLock.RUnlock()
+
+	fmt.Printf("flushWorker 找到 %d 个需要刷新的缓冲区\n", len(buffersToFlush))
+	for _, buffer := range buffersToFlush {
+		fmt.Printf("flushWorker 准备刷新缓冲区: BlockID=%d, Block数据大小=%d, chunks数量=%d\n",
+			buffer.blockID, buffer.position, len(buffer.pending))
+
+		// 执行实际的刷新操作
+		err := s.flushBuffer(buffer.blockID, buffer.data[:buffer.position], buffer.pending)
+		if err == nil {
+			buffer.lock.Lock()
+			buffer.position = 0
+			buffer.pending = nil
+			buffer.state = bufferEmpty
+			buffer.lock.Unlock()
+		} else {
+			fmt.Printf("flushWorker 刷新缓冲区失败: %v\n", err)
 		}
 	}
 }
@@ -631,18 +640,27 @@ func (s *storage) Flush() *AsyncResult[[]BlockID] {
 	return result
 }
 
-// Close 关闭存储，包括数据库连接
+// Close 关闭存储，确保所有数据都已刷新
 func (s *storage) Close() error {
-	s.connMutex.Lock()
-	defer s.connMutex.Unlock()
+	fmt.Println("storage Close: 开始关闭")
 
+	// 发送停止信号
+	s.controlChan <- signalStop
+
+	// 等待 worker 完成
+	<-s.workerDone
+
+	fmt.Println("storage Close: flushWorker 已停止")
+
+	// 关闭其他资源
 	if s.conn != nil {
 		if err := s.conn.Close(); err != nil {
-			return fmt.Errorf("failed to close database connection: %v", err)
+			return fmt.Errorf("close sqlite connection error: %v", err)
 		}
 		s.conn = nil
 	}
 
+	fmt.Println("storage Close: 完成")
 	return nil
 }
 
@@ -668,10 +686,10 @@ func min64(a, b int64) int64 {
 func (s *storage) triggerFlush() {
 	fmt.Println("triggerFlush: 尝试发送刷新信号")
 	select {
-	case s.flushChan <- struct{}{}:
+	case s.controlChan <- signalFlush:
 		fmt.Println("triggerFlush: 成功发送刷新信号")
 	default:
-		fmt.Println("triggerFlush: 刷新通道已满，无法发送信号")
+		fmt.Println("triggerFlush: 控制通道已满，无法发送信号")
 	}
 }
 
