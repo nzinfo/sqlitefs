@@ -1,6 +1,9 @@
 package sqlfs
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 // fileChunk represents a chunk of file data stored in the file_chunks table
 type fileChunk struct {
@@ -129,26 +132,77 @@ func (fc *fileContent) Read(fs *SQLiteFS, fileID EntryID, p []byte, offset int64
 	// 用于跟踪已读取的字节数
 	totalBytesRead := 0
 
+	// 创建一个等待组，用于等待所有异步读取完成
+	var wg sync.WaitGroup
+	var readErr error
+	var mu sync.Mutex // 用于保护 readErr
+
 	// 遍历所有段
 	for _, seg := range chunkSegments {
 		// 获取对应的 chunk
 		chunk := fc.chunks[seg.ChunkIndex]
 
-		// 计算在当前 chunk 中的读取范围
-		chunkStart := chunk.offset + seg.Delta
-		chunkEnd := chunk.offset + chunk.size
-		readStart := max(offset, chunkStart)
-		readEnd := min(offset+int64(len(p)), chunkEnd)
+		// 计算文件中的范围
+		fileStart := seg.Start
+		fileEnd := seg.End
 
-		// 计算读取的字节数和在目标缓冲区中的偏移
+		// 计算与请求范围的交集
+		readStart := max(offset, fileStart)
+		readEnd := min(offset+int64(len(p)), fileEnd)
+
+		// 如果没有交集，跳过
+		if readStart >= readEnd {
+			continue
+		}
+
+		// 计算在缓冲区中的偏移
+		bufOffset := int(readStart - offset)
+
+		// 计算在 chunk 中的偏移
+		chunkOffset := int(seg.Delta + (readStart - fileStart))
+
+		// 计算需要读取的字节数
 		bytesToRead := int(readEnd - readStart)
-		// bufOffset := int(readStart - offset)
-		chunkOffset := int(readStart - chunk.offset)
 
-		fmt.Printf("读取 block %d: offset=%d, size=%d, chunkOffset=%d, bytesToRead=%d\n",
-			chunk.blockID, chunk.blockOffset, chunk.size, chunkOffset, bytesToRead)
+		// 确保不会超出缓冲区边界
+		if bufOffset+bytesToRead > len(p) {
+			bytesToRead = len(p) - bufOffset
+		}
+
+		fmt.Printf("读取 chunk %d: 文件范围 [%d, %d), 块偏移 %d, 缓冲区偏移 %d, 读取字节数 %d\n",
+			seg.ChunkIndex, readStart, readEnd, chunkOffset, bufOffset, bytesToRead)
+
+		// 增加等待组计数
+		wg.Add(1)
+
+		// 从块中读取数据
+		go func(chunk fileChunk, bufOffset, chunkOffset, bytesToRead int) {
+			defer wg.Done()
+
+			// 从 SQLite 读取数据块
+			result := fs.s.BlockRead(BlockID(chunk.blockID), p[bufOffset:bufOffset+bytesToRead], chunk.blockOffset+int64(chunkOffset))
+			bytesRead, err := result.Wait()
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil && readErr == nil {
+				readErr = err
+				return
+			}
+
+			totalBytesRead += bytesRead
+		}(chunk, bufOffset, chunkOffset, bytesToRead)
 	}
-	panic("implement me")
+
+	// 等待所有读取操作完成
+	wg.Wait()
+
+	// 如果有错误，返回错误
+	if readErr != nil {
+		return totalBytesRead, readErr
+	}
+
 	return totalBytesRead, nil
 }
 

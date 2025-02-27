@@ -66,6 +66,9 @@ type StorageOps interface {
 	// buffer size / 需要读取的大小 由 p 给出， 返回实际写入的大小
 	FileRead(fileID EntryID, p []byte, offset int64) *AsyncResult[int]
 
+	// 数据块 Block 相关操作
+	BlockRead(blockID BlockID, p []byte, offset int64) *AsyncResult[int]
+
 	// 写入到数据块
 	Flush() *AsyncResult[[]BlockID]
 	// 关闭存储

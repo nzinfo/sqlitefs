@@ -499,6 +499,58 @@ func (s *storage) FileRead(fileID EntryID, p []byte, offset int64) *AsyncResult[
 	panic("implement me")
 }
 
+func (s *storage) BlockRead(blockID BlockID, p []byte, offset int64) *AsyncResult[int] {
+	result := NewAsyncResult[int]()
+	
+	go func() {
+		// 获取数据块
+		block, err := s.getBlock(blockID)
+		if err != nil {
+			result.Complete(0, fmt.Errorf("failed to get block %d: %w", blockID, err))
+			return
+		}
+		
+		// 检查偏移量是否超出范围
+		if offset >= block.Size {
+			result.Complete(0, fmt.Errorf("offset %d is out of range for block %d with size %d", offset, blockID, block.Size))
+			return
+		}
+		
+		// 计算可读取的字节数
+		bytesToRead := int(block.Size - offset)
+		if bytesToRead > len(p) {
+			bytesToRead = len(p)
+		}
+		
+		// 从数据块中读取数据
+		var data []byte
+		err = s.db.QueryRowContext(s.ctx, `
+			SELECT data FROM blocks WHERE id = ? LIMIT 1
+		`, blockID).Scan(&data)
+		
+		if err != nil {
+			result.Complete(0, fmt.Errorf("failed to query block data: %w", err))
+			return
+		}
+		
+		// 检查数据是否足够
+		if int64(len(data)) < offset+int64(bytesToRead) {
+			bytesToRead = int(int64(len(data)) - offset)
+			if bytesToRead <= 0 {
+				result.Complete(0, nil)
+				return
+			}
+		}
+		
+		// 复制数据到目标缓冲区
+		copy(p, data[offset:offset+int64(bytesToRead)])
+		
+		result.Complete(bytesToRead, nil)
+	}()
+	
+	return result
+}
+
 /*
 func (s *storage) fileWriteSync(fileID EntryID, p []byte, offset int64) (int, error) {
 	// TODO: implement me
@@ -699,4 +751,26 @@ func (s *storage) loadEntriesByParentSync(parentID EntryID, parentPath string) (
 	}
 
 	return entries, nil
+}
+
+// Block 表示数据块
+type Block struct {
+	ID   BlockID
+	Size int64
+	// Data []byte // 数据块内容，按需加载
+}
+
+// getBlock 获取指定 ID 的数据块信息
+func (s *storage) getBlock(blockID BlockID) (*Block, error) {
+	var block Block
+	
+	err := s.db.QueryRowContext(s.ctx, `
+		SELECT id, size FROM blocks WHERE id = ? LIMIT 1
+	`, blockID).Scan(&block.ID, &block.Size)
+	
+	if err != nil {
+		return nil, fmt.Errorf("failed to query block: %w", err)
+	}
+	
+	return &block, nil
 }
