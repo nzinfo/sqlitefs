@@ -754,16 +754,28 @@ func (s *storage) getBlock(blockID BlockID) (data []byte, inWriteBuffer bool, er
 	}
 
 	// 从数据库中加载
-	var size int64
-	err = s.db.QueryRowContext(s.ctx, `
-		SELECT size, data FROM blocks WHERE id = ? LIMIT 1
-	`, blockID).Scan(&size, &data)
+	s.connMutex.RLock()
+	defer s.connMutex.RUnlock()
 
+	var stmt *sqlite3.Stmt
+	stmt, _, err = s.conn.Prepare(`SELECT data FROM blocks WHERE block_id = ? LIMIT 1`)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to query block: %w", err)
+		return nil, false, fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	if !stmt.Step() {
+		return nil, false, fmt.Errorf("block %d not found", blockID)
 	}
 
-	// 将数据放入缓存
+	// 获取原始数据
+	rawData := stmt.ColumnRawBlob(0)
+
+	// 为缓存复制一份数据
+	data = make([]byte, len(rawData))
+	copy(data, rawData)
+
+	// 将复制的数据放入缓存
 	s.blockCache.Add(blockID, data)
 
 	return data, false, nil
