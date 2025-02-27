@@ -2,6 +2,7 @@ package sqlfs
 
 import (
 	"fmt"
+	"io"
 	"sync"
 )
 
@@ -126,7 +127,8 @@ func (fc *fileContent) Read(fs *SQLiteFS, fileID EntryID, p []byte, offset int64
 
 	// 如果没有找到任何段，返回错误
 	if len(chunkSegments) == 0 {
-		return 0, fmt.Errorf("no chunks found for range [%d, %d)", offset, offset+int64(len(p)))
+		return 0, io.EOF
+		//fmt.Errorf("no chunks found for range [%d, %d)", offset, offset+int64(len(p)))
 	}
 
 	// 用于跟踪已读取的字节数
