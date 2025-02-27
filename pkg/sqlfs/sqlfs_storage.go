@@ -372,7 +372,7 @@ func (s *storage) getAvailableBuffer(dataSize int) (*WriteBuffer, int) {
 	s.stateLock.Lock()
 	defer s.stateLock.Unlock()
 
-	fmt.Printf("getAvailableBuffer: 开始查找可用缓冲区，当前索引=%d，需要空间=%d\n", s.writeBufferIndex, dataSize)
+	// fmt.Printf("getAvailableBuffer: 开始查找可用缓冲区，当前索引=%d，需要空间=%d\n", s.writeBufferIndex, dataSize)
 
 	// 从当前索引开始检查，最多检查一轮
 	checkedCount := 0
@@ -381,7 +381,7 @@ func (s *storage) getAvailableBuffer(dataSize int) (*WriteBuffer, int) {
 
 		// 如果缓冲区未初始化，初始化它
 		if s.writeBuffers[idx] == nil {
-			fmt.Printf("getAvailableBuffer: 缓冲区[%d]未初始化，正在初始化\n", idx)
+			// fmt.Printf("getAvailableBuffer: 缓冲区[%d]未初始化，正在初始化\n", idx)
 			s.writeBuffers[idx] = s.initBuffer(idx)
 		}
 
@@ -397,7 +397,7 @@ func (s *storage) getAvailableBuffer(dataSize int) (*WriteBuffer, int) {
 			buffer.position = 0
 			buffer.lock.Unlock()
 			// s.writeBufferIndex = idx // 避免 writeBufferIndex 溢出
-			fmt.Printf("getAvailableBuffer: 找到空闲缓冲区[%d]\n", idx)
+			// fmt.Printf("getAvailableBuffer: 找到空闲缓冲区[%d]\n", idx)
 			return buffer, idx
 		}
 
@@ -406,18 +406,15 @@ func (s *storage) getAvailableBuffer(dataSize int) (*WriteBuffer, int) {
 			remainSpace := DefaultBufferSize - buffer.position
 			if remainSpace >= dataSize {
 				buffer.lock.Unlock()
-				fmt.Printf("getAvailableBuffer: 缓冲区[%d]正在写入但空间足够，剩余空间=%d\n", idx, remainSpace)
+				// fmt.Printf("getAvailableBuffer: 缓冲区[%d]正在写入但空间足够，剩余空间=%d\n", idx, remainSpace)
 				return buffer, idx
 			}
-			fmt.Printf("getAvailableBuffer: 缓冲区[%d]空间不足，剩余空间=%d，需要空间=%d\n", idx, remainSpace, dataSize)
+			// fmt.Printf("getAvailableBuffer: 缓冲区[%d]空间不足，剩余空间=%d，需要空间=%d\n", idx, remainSpace, dataSize)
 		}
-		// else {
-		//	fmt.Printf("getAvailableBuffer: 缓冲区[%d]状态=%d，不可用\n", idx, buffer.state)
-		//}
 
 		// 处理 state == Full 的情况
 		if buffer.state == bufferFull {
-			fmt.Printf("getAvailableBuffer: 缓冲区[%d]状态=%d，已满，触发异步刷新\n", idx, buffer.state)
+			// fmt.Printf("getAvailableBuffer: 缓冲区[%d]状态=%d，已满，触发异步刷新\n", idx, buffer.state)
 			s.triggerFlush()
 			s.writeBufferIndex = (idx + 1) % DefaultBufferNum
 			checkedCount = 0
@@ -429,7 +426,7 @@ func (s *storage) getAvailableBuffer(dataSize int) (*WriteBuffer, int) {
 		if (buffer.state == bufferWriting) && (DefaultBufferSize-buffer.position < AlignSize) {
 			buffer.state = bufferFull
 			// 触发异步刷新
-			fmt.Println("writeToBuffer: 缓冲区已满，触发异步刷新")
+			// fmt.Println("writeToBuffer: 缓冲区已满，触发异步刷新")
 			s.triggerFlush()
 
 			//更新下一次检查的起始位置
@@ -444,7 +441,7 @@ func (s *storage) getAvailableBuffer(dataSize int) (*WriteBuffer, int) {
 		// s.writeBufferIndex = (idx + 1) % DefaultBufferNum  // 不必然需要修改，完全可能是当前待写入的数据过大。
 	}
 
-	fmt.Printf("getAvailableBuffer: 检查了 %d 个缓冲区后未找到可用缓冲区\n", checkedCount)
+	// fmt.Printf("getAvailableBuffer: 检查了 %d 个缓冲区后未找到可用缓冲区\n", checkedCount)
 	// 没有找到可用的缓冲区
 	return nil, -1
 }
@@ -483,14 +480,14 @@ func (s *storage) fileWriteSync(fileID EntryID, reqID int64, p []byte, offset in
 // 写入到缓冲区
 func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, reqID int64, p []byte, offset int64) int64 {
 	// buffer.lock 已在调用方加锁
-	fmt.Printf("writeToBuffer: 文件ID=%d, reqID=%d, 数据大小=%d, 偏移量=%d\n",
-		fileID, reqID, len(p), offset)
+	// fmt.Printf("writeToBuffer: 文件ID=%d, reqID=%d, 数据大小=%d, 偏移量=%d\n",
+	//	fileID, reqID, len(p), offset)
 
 	remainSpace := int64(DefaultBufferSize - buffer.position)
 	writeSize := min64(int64(len(p)), remainSpace)
 
-	fmt.Printf("writeToBuffer: 缓冲区剩余空间=%d, 实际写入大小=%d\n",
-		remainSpace, writeSize)
+	// fmt.Printf("writeToBuffer: 缓冲区剩余空间=%d, 实际写入大小=%d\n",
+	//	remainSpace, writeSize)
 
 	// 写入数据
 	copy(buffer.data[buffer.position:], p[:writeSize])
@@ -507,8 +504,8 @@ func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, reqID int64
 	}
 	buffer.pending = append(buffer.pending, chunk)
 
-	fmt.Printf("writeToBuffer: 添加 PendingChunk: fileID=%d, reqID=%d, offset=%d, size=%d, bufferOffset=%d\n",
-		fileID, reqID, offset, writeSize, buffer.position)
+	// fmt.Printf("writeToBuffer: 添加 PendingChunk: fileID=%d, reqID=%d, offset=%d, size=%d, bufferOffset=%d\n",
+	//	fileID, reqID, offset, writeSize, buffer.position)
 
 	// 更新状态
 	buffer.position += int(writeSize)
@@ -517,7 +514,7 @@ func (s *storage) writeToBuffer(buffer *WriteBuffer, fileID EntryID, reqID int64
 		// 此处代码目前永远不会激活，因为调用时会检查。
 		buffer.state = bufferFull
 		// 触发异步刷新
-		fmt.Println("writeToBuffer: 缓冲区已满，触发异步刷新")
+		// fmt.Println("writeToBuffer: 缓冲区已满，触发异步刷新")
 		s.triggerFlush()
 	}
 
@@ -532,13 +529,11 @@ func (s *storage) flushWorker() {
 		signal := <-s.controlChan
 		switch signal {
 		case signalStop:
-			fmt.Println("flushWorker 收到停止信号")
 			// 在退出前执行最后一次刷新
 			s.doFlush()
 			return
 
 		case signalFlush:
-			fmt.Println("flushWorker 收到刷新信号")
 			s.doFlush()
 		}
 	}
@@ -563,10 +558,10 @@ func (s *storage) doFlush() {
 	}
 	s.stateLock.RUnlock()
 
-	fmt.Printf("flushWorker 找到 %d 个需要刷新的缓冲区\n", len(buffersToFlush))
+	// fmt.Printf("flushWorker 找到 %d 个需要刷新的缓冲区\n", len(buffersToFlush))
 	for _, buffer := range buffersToFlush {
-		fmt.Printf("flushWorker 准备刷新缓冲区: BlockID=%d, Block数据大小=%d, chunks数量=%d\n",
-			buffer.blockID, buffer.position, len(buffer.pending))
+		// fmt.Printf("flushWorker 准备刷新缓冲区: BlockID=%d, Block数据大小=%d, chunks数量=%d\n",
+		//	buffer.blockID, buffer.position, len(buffer.pending))
 
 		// 执行实际的刷新操作
 		err := s.flushBuffer(buffer.blockID, buffer.data[:buffer.position], buffer.pending)
@@ -606,54 +601,39 @@ func (s *storage) Flush() *AsyncResult[[]BlockID] {
 		}
 		s.stateLock.RUnlock()
 
-		/*
-			fmt.Printf("Flush: 找到 %d 个需要刷新的缓冲区\n", len(buffersToFlush))
-			for i, buffer := range buffersToFlush {
-				buffer.lock.RLock()
-				defer buffer.lock.RUnlock()
-
-				fmt.Printf("Flush: 缓冲区 %d/%d 状态=%d, 位置=%d, 待处理项=%d\n",
-					i+1, len(buffersToFlush), buffer.state, buffer.position, len(buffer.pending))
-			}
-		*/
-
-		// 数据库连接加锁
-		//s.connMutex.Lock()
-		//defer s.connMutex.Unlock()
-
 		// 刷新所有缓冲区
 		var blockIDs []BlockID
 		var flushErr error
-		for i, buffer := range buffersToFlush {
+		for _, buffer := range buffersToFlush {
 			buffer.lock.RLock()
 			defer buffer.lock.RUnlock()
 
-			fmt.Printf("Flush: 正在刷新缓冲区 %d/%d, 状态=%d, 位置=%d, 待处理项=%d\n",
-				i+1, len(buffersToFlush), buffer.state, buffer.position, len(buffer.pending))
+			// fmt.Printf("Flush: 正在刷新缓冲区 %d/%d, 状态=%d, 位置=%d, 待处理项=%d\n",
+			//	i+1, len(buffersToFlush), buffer.state, buffer.position, len(buffer.pending))
 
 			if len(buffer.pending) > 0 {
 				err := s.flushBuffer(buffer.blockID, buffer.data[:buffer.position], buffer.pending)
 				if err != nil {
 					flushErr = fmt.Errorf("flush buffer error: %v", err)
-					fmt.Printf("Flush: 刷新缓冲区 %d 失败: %v\n", i+1, err)
+					// fmt.Printf("Flush: 刷新缓冲区 %d 失败: %v\n", i+1, err)
 					break
 				}
 
-				fmt.Printf("Flush: 刷新缓冲区 %d 成功, BlockID=%d\n", i+1, buffer.blockID)
+				// fmt.Printf("Flush: 刷新缓冲区 %d 成功, BlockID=%d\n", i+1, buffer.blockID)
 				blockIDs = append(blockIDs, buffer.blockID)
 
 				// 重置缓冲区
 				buffer.position = 0
 				buffer.pending = nil
 				buffer.state = bufferEmpty
-				fmt.Printf("Flush: 重置缓冲区 %d\n", i+1)
+				// fmt.Printf("Flush: 重置缓冲区 %d\n", i+1)
 			} else {
-				fmt.Printf("Flush: 缓冲区 %d 没有待处理项，跳过\n", i+1)
+				// fmt.Printf("Flush: 缓冲区 %d 没有待处理项，跳过\n", i+1)
 			}
 			// buffer.lock.Unlock()
 		}
 
-		fmt.Printf("Flush: 完成，共刷新 %d 个块，错误: %v\n", len(blockIDs), flushErr)
+		// fmt.Printf("Flush: 完成，共刷新 %d 个块，错误: %v\n", len(blockIDs), flushErr)
 		result.Complete(blockIDs, flushErr)
 	} // ()
 
@@ -662,7 +642,7 @@ func (s *storage) Flush() *AsyncResult[[]BlockID] {
 
 // Close 关闭存储，确保所有数据都已刷新
 func (s *storage) Close() error {
-	fmt.Println("storage Close: 开始关闭")
+	// fmt.Println("storage Close: 开始关闭")
 
 	// 发送停止信号
 	s.controlChan <- signalStop
@@ -670,9 +650,9 @@ func (s *storage) Close() error {
 	// 等待 worker 完成
 	<-s.workerDone
 
-	fmt.Println("storage Close: flushWorker 已停止")
+	// fmt.Println("storage Close: flushWorker 已停止")
 
-	fmt.Println("[Lock]storage Close")
+	// fmt.Println("[Lock]storage Close")
 	s.connMutex.Lock()
 	defer s.connMutex.Unlock()
 
@@ -685,7 +665,7 @@ func (s *storage) Close() error {
 		s.conn = nil
 	}
 
-	fmt.Println("storage Close: 完成")
+	// fmt.Println("storage Close: 完成")
 	return nil
 }
 
@@ -709,21 +689,20 @@ func min64(a, b int64) int64 {
 
 // triggerFlush 触发缓冲区刷新
 func (s *storage) triggerFlush() {
-	fmt.Println("triggerFlush: 尝试发送刷新信号")
+	// fmt.Println("triggerFlush: 尝试发送刷新信号")
 	select {
 	case s.controlChan <- signalFlush:
-		fmt.Println("triggerFlush: 成功发送刷新信号")
+		// fmt.Println("triggerFlush: 成功发送刷新信号")
 	default:
-		fmt.Println("triggerFlush: 控制通道已满，无法发送信号")
+		// fmt.Println("triggerFlush: 控制通道已满，无法发送信号")
 	}
 }
 
 // flushBuffer 将数据写入数据库
 func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChunk) error {
-	fmt.Printf("flushBuffer 开始执行: 数据大小=%d, chunks数量=%d\n", len(data), len(chunks))
 	// s.conn 因为涉及 Prepare / Next 等操作，只能单线程操作
 	// 考虑到代码易用性，约定仅在实际进行数据库操作的函数中 尝试获得锁。
-	fmt.Println("[Lock]flushBuffer")
+	// fmt.Println("[Lock]flushBuffer")
 	s.connMutex.Lock()
 	defer s.connMutex.Unlock()
 

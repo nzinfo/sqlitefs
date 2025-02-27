@@ -64,7 +64,7 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 
 	// 新建文件，需要修改。
 	_, err := func() (*AsyncResult[WriteResult], error) {
-		fmt.Println("[Lock]New")
+		// fmt.Println("[Lock]New")
 		s.connMutex.Lock()
 		defer s.connMutex.Unlock()
 
@@ -265,7 +265,7 @@ func (s *storage) Rename(from, to string) error {
 
 	// 4. 修改 from 的 parent ID 和 name
 	// 获取锁
-	fmt.Println("[Lock]Rename")
+	// fmt.Println("[Lock]Rename")
 	s.connMutex.Lock()
 	defer s.connMutex.Unlock()
 
@@ -338,7 +338,7 @@ func (s *storage) Remove(path string) error {
 		}
 	}
 
-	fmt.Println("[Lock]Remove")
+	//fmt.Println("[Lock]Remove")
 	s.connMutex.Lock()
 	defer s.connMutex.Unlock()
 
@@ -443,7 +443,7 @@ func (s *storage) LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk] {
 }
 
 func (s *storage) loadFileChunksSync(fileID EntryID) ([]fileChunk, error) {
-	fmt.Println("[Lock][Read]loadFileChunksSync")
+	// fmt.Println("[Lock][Read]loadFileChunksSync")
 	s.connMutex.RLock()
 	defer s.connMutex.RUnlock()
 
@@ -567,7 +567,7 @@ func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
 				return
 			}
 		} else {
-			fmt.Println("[Lock]FileTruncate")
+			// fmt.Println("[Lock]FileTruncate")
 			s.connMutex.Lock()
 			defer s.connMutex.Unlock()
 
@@ -669,7 +669,7 @@ func (s *storage) deleteAllChunksInTx(tx *sqlite3.Conn, fileID EntryID) error {
 
 func (s *storage) loadEntriesByParentSync(parentID EntryID, parentPath string) ([]fileInfo, error) {
 	// 获得锁
-	fmt.Println("[Lock][Read]loadEntriesByParentSync")
+	// fmt.Println("[Lock][Read]loadEntriesByParentSync")
 	s.connMutex.RLock()
 	defer s.connMutex.RUnlock()
 
@@ -745,7 +745,7 @@ func (s *storage) getBlock(blockID BlockID) (data []byte, inWriteBuffer bool, er
 	}
 
 	// 获得锁
-	fmt.Println("[Lock][Read]getBlock")
+	//fmt.Println("[Lock][Read]getBlock")
 	s.connMutex.RLock()
 	defer s.connMutex.RUnlock()
 

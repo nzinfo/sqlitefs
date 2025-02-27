@@ -76,7 +76,7 @@ func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy
 	defer fs.mu.Unlock()
 
 	f, has := fs.s.Get(filename)
-	fmt.Printf("OpenFile: %s, flag: %d, perm: %v, has: %v\n", filename, flag, perm, has)
+	// fmt.Printf("OpenFile: %s, flag: %d, perm: %v, has: %v\n", filename, flag, perm, has)
 	if !has {
 		if !isCreate(flag) {
 			return nil, os.ErrNotExist
@@ -132,31 +132,14 @@ func (fs *SQLiteFS) Close() error {
 	}
 
 	// 等待刷新完成
-	fmt.Println("Close: 刷新存储")
+	// fmt.Println("Close: 刷新存储")
 	result := fs.s.Flush()
 	if _, err := result.Wait(); err != nil {
 		return fmt.Errorf("failed to flush storage: %v", err)
 	}
 
-	/*
-		// 等待所有未处理的更新完成
-		fs.waitForPendingUpdates()
-
-		// 确保处理所有待处理的更新
-		fmt.Println("Close: 处理所有待处理的更新")
-		fs.processAllPendingUpdates()
-
-		// 停止更新处理器
-
-			if fs.updateTicker != nil {
-				fmt.Println("Close: 停止更新处理器")
-				fs.updateTicker.Stop()
-				close(fs.updateDone)
-			}
-	*/
-
 	// 关闭数据库连接
-	fmt.Println("Close: 关闭数据库连接")
+	// fmt.Println("Close: 关闭数据库连接")
 	if err := fs.s.Close(); err != nil {
 		return fmt.Errorf("failed to close storage: %v", err)
 	}
@@ -370,134 +353,3 @@ type fileInfo struct {
 	createAt time.Time   // Creation time
 	modTime  time.Time   // Last modification time
 }
-
-/*
-// startChunkUpdateHandler 启动 chunk 更新处理器
-func (fs *SQLiteFS) startChunkUpdateHandler() {
-	fmt.Println("启动 chunk 更新处理器")
-	fs.updateTicker = time.NewTicker(updateInterval)
-	fs.updateDone = make(chan struct{})
-
-	go func() {
-		fmt.Println("chunk 更新处理器 goroutine 已启动")
-		defer fmt.Println("chunk 更新处理器 goroutine 已退出")
-
-		for {
-			select {
-			case <-fs.updateDone:
-				fmt.Println("chunk 更新处理器收到关闭信号，退出")
-				return
-			case batch, ok := <-fs.s.chunkUpdateChan:
-				if !ok {
-					fmt.Println("chunk 更新通道已关闭，退出")
-					return
-				}
-				fmt.Printf("接收到更新通知: %+v, 包含 %d 个文件\n", batch, len(batch.Updates))
-				// 处理批量更新
-				fs.handleChunkUpdateBatch(batch)
-			case <-fs.updateTicker.C:
-				// 定期处理所有待更新的 chunk
-				fmt.Println("定时处理所有待更新的 chunk")
-				fs.processAllPendingUpdates()
-			}
-		}
-	}()
-}
-
-// handleChunkUpdateBatch 处理批量更新通知
-func (fs *SQLiteFS) handleChunkUpdateBatch(batch ChunkUpdateBatch) {
-	fmt.Printf("handleChunkUpdateBatch: 收到批量更新通知，包含 %d 个文件\n", len(batch.Updates))
-
-	fs.updateMu.Lock()
-	defer fs.updateMu.Unlock()
-
-	// 遍历所有文件的更新
-	for fileID, updates := range batch.Updates {
-		fmt.Printf("处理文件 ID=%d 的更新，包含 %d 个 chunk\n", fileID, len(updates))
-
-		// 如果文件不在待更新列表中，初始化一个新的 map
-		if _, ok := fs.pendingUpdates[fileID]; !ok {
-			fs.pendingUpdates[fileID] = make(map[int64]ChunkUpdateInfo)
-		}
-
-		// 合并更新
-		for offset, info := range updates {
-			fs.pendingUpdates[fileID][offset] = info
-		}
-	}
-}
-
-// processAllPendingUpdates 处理所有待更新的 chunk
-func (fs *SQLiteFS) processAllPendingUpdates() {
-	fs.updateMu.Lock()
-
-	if len(fs.pendingUpdates) == 0 {
-		fs.updateMu.Unlock()
-		return
-	}
-
-	fmt.Printf("processAllPendingUpdates: 处理 %d 个文件的待更新 chunk\n", len(fs.pendingUpdates))
-
-	// 复制待更新列表，以便在不持有锁的情况下处理
-	pendingCopy := make(map[EntryID]map[int64]ChunkUpdateInfo)
-	for fileID, updates := range fs.pendingUpdates {
-		pendingCopy[fileID] = make(map[int64]ChunkUpdateInfo)
-		for offset, info := range updates {
-			pendingCopy[fileID][offset] = info
-		}
-	}
-
-	// 清空待更新列表
-	fs.pendingUpdates = make(map[EntryID]map[int64]ChunkUpdateInfo)
-	fs.updateMu.Unlock()
-
-	// 处理每个文件的更新
-	for fileID, updates := range pendingCopy {
-		fmt.Printf("处理文件 ID=%d 的 %d 个 chunk 更新\n", fileID, len(updates))
-
-		// 查找打开的文件
-		fs.mu.Lock()
-		f, ok := fs.openFiles[fileID]
-		fs.mu.Unlock()
-
-		if ok {
-			fmt.Printf("文件 ID=%d 已打开，更新内存中的 chunk 信息\n", fileID)
-			// 文件已打开，更新内存中的 chunk 信息
-			f.updateChunks(updates)
-		} else {
-			fmt.Printf("文件 ID=%d 未打开，跳过更新\n", fileID)
-		}
-	}
-}
-
-// waitForPendingUpdates 等待所有未处理的更新完成
-func (fs *SQLiteFS) waitForPendingUpdates() {
-	// 最多等待 500ms，确保所有更新都被处理
-	maxWait := 500 * time.Millisecond
-	start := time.Now()
-
-	for {
-		// 检查是否有未处理的更新
-		fs.updateMu.Lock()
-		hasPending := len(fs.pendingUpdates) > 0
-		fs.updateMu.Unlock()
-
-		if !hasPending {
-			fmt.Println("waitForPendingUpdates: 所有更新已处理完成")
-			return
-		}
-
-		// 检查是否超时
-		if time.Since(start) > maxWait {
-			fmt.Printf("waitForPendingUpdates: 等待超时，仍有 %d 个文件的更新未处理\n", len(fs.pendingUpdates))
-			return
-		}
-
-		// 处理一次所有待更新的 chunk
-		fs.processAllPendingUpdates()
-
-		// 短暂休眠，避免 CPU 占用过高
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-*/

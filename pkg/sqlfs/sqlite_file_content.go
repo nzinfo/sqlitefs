@@ -1,7 +1,6 @@
 package sqlfs
 
 import (
-	"fmt"
 	"io"
 	"sync"
 )
@@ -123,7 +122,7 @@ func (fc *fileContent) Read(fs *SQLiteFS, fileID EntryID, p []byte, offset int64
 	// 从 segment tree 中查询
 	chunkSegments := fc.chunkIndex.QueryRange(offset, offset+int64(len(p)))
 
-	fmt.Printf("Read: 查询范围 [%d, %d), 找到 %d 个段\n", offset, offset+int64(len(p)), len(chunkSegments))
+	//fmt.Printf("Read: 查询范围 [%d, %d), 找到 %d 个段\n", offset, offset+int64(len(p)), len(chunkSegments))
 
 	// 如果没有找到任何段，返回错误
 	if len(chunkSegments) == 0 {
@@ -171,8 +170,8 @@ func (fc *fileContent) Read(fs *SQLiteFS, fileID EntryID, p []byte, offset int64
 			bytesToRead = len(p) - bufOffset
 		}
 
-		fmt.Printf("读取 chunk %d: 文件范围 [%d, %d), 块偏移 %d, 缓冲区偏移 %d, 读取字节数 %d\n",
-			seg.ChunkIndex, readStart, readEnd, chunkOffset, bufOffset, bytesToRead)
+		// fmt.Printf("读取 chunk %d: 文件范围 [%d, %d), 块偏移 %d, 缓冲区偏移 %d, 读取字节数 %d\n",
+		// 	seg.ChunkIndex, readStart, readEnd, chunkOffset, bufOffset, bytesToRead)
 
 		// 增加等待组计数
 		wg.Add(1)
@@ -229,8 +228,8 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 		blockOffset: int64(rs.BlockOffset),
 	}
 
-	fmt.Printf("Write: 写入的 chunk 为: offset=%d, size=%d, blockID=%d, blockOffset=%d\n",
-		chunk.offset, chunk.size, chunk.blockID, chunk.blockOffset)
+	// fmt.Printf("Write: 写入的 chunk 为: offset=%d, size=%d, blockID=%d, blockOffset=%d\n",
+	// 	chunk.offset, chunk.size, chunk.blockID, chunk.blockOffset)
 
 	// 添加新chunk
 	newIndex := len(fc.chunks)
