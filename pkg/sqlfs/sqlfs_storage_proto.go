@@ -764,6 +764,11 @@ func (s *storage) getBlock(blockID BlockID) (data []byte, inWriteBuffer bool, er
 	}
 	defer stmt.Close()
 
+	// 绑定参数
+	if err = stmt.BindInt64(1, int64(blockID)); err != nil {
+		return nil, false, fmt.Errorf("failed to bind block_id: %w", err)
+	}
+
 	if !stmt.Step() {
 		return nil, false, fmt.Errorf("block %d not found", blockID)
 	}
