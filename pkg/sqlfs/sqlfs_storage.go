@@ -128,6 +128,7 @@ type storage struct {
 	// LRU 缓存，这两个缓存都是线程安全的，不需要额外的锁
 	entriesCache *lru.Cache // LRU cache for file/directory information, full_path -> entryId.
 	dirsCache    *lru.Cache // LRU cache for directory information	entryId -> infoList.
+	blockCache   *lru.Cache // LRU cache for block data, block_id -> []byte
 	rootEntry    *fileInfo
 	maxEntryID   EntryID
 	maxBlockID   BlockID
@@ -170,6 +171,7 @@ func newStorage(dbName string) (*storage, error) {
 		flushChan:        make(chan struct{}, 1),
 		entriesCache:     lru.New(1024), // 添加 entries 缓存初始化
 		dirsCache:        lru.New(1024), // 添加 dirs 缓存初始化
+		blockCache:       lru.New(8),    // 添加 blocks 缓存初始化
 		rootEntry:        loadRootEntry(conn),
 		maxEntryID:       maxEntryID,
 		maxBlockID:       maxBlockID,
