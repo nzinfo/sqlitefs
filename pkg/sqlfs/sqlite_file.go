@@ -69,15 +69,25 @@ func (f *file) ReadAt(b []byte, off int64) (int, error) {
 
 	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 开始读取，偏移量=%d，长度=%d\n",
 		f.Name(), f.fileInfo.entryID, off, len(b))
-	result := f.fs.s.FileRead(f.fileInfo.entryID, b, off)
-	n, err := result.Wait()
+
+	n, err := f.content.Read(f.fs, f.fileInfo.entryID, b, off)
 	if err != nil {
 		fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 读取失败: %v\n",
 			f.Name(), f.fileInfo.entryID, err)
 		return 0, err
 	}
-	fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 读取成功，实际读取长度=%d\n",
-		f.Name(), f.fileInfo.entryID, n)
+
+	/*
+			result := f.fs.s.FileRead(f.fileInfo.entryID, b, off)
+		n, err := result.Wait()
+		if err != nil {
+			fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 读取失败: %v\n",
+				f.Name(), f.fileInfo.entryID, err)
+			return 0, err
+		}
+		fmt.Printf("file.ReadAt: 文件 %s (ID=%d) 读取成功，实际读取长度=%d\n",
+			f.Name(), f.fileInfo.entryID, n)
+	*/
 	return n, nil
 }
 

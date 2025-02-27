@@ -14,76 +14,22 @@ type fileChunk struct {
 
 // fileContent manages file chunks using a segment tree for efficient range queries
 type fileContent struct {
-	chunks []fileChunk // Sorted by offset
-	// tree          *segmentTree
+	chunks        []fileChunk // Sorted by offset
+	chunkIndex    *SegmentTree
 	endChunkIndex int // 记录 offset + size 最大的 chunk 的索引
 }
-
-/*
-// segmentTree implements an interval tree for chunk management
-type segmentTree struct {
-	root *segmentNode
-}
-
-type segmentNode struct {
-	start, end int64
-	chunk      *fileChunk
-	left       *segmentNode
-	right      *segmentNode
-}
-*/
 
 // newFileContent creates a new fileContent from a slice of chunks
 func newFileContent(chunks []fileChunk) *fileContent {
 	// 不可对 chunk 排序，因为加载时严格按时间顺序加载的
 	fc := &fileContent{
-		chunks: chunks,
+		chunks:     chunks,
+		chunkIndex: NewSegmentTree(chunks),
 	}
 	// fc.buildSegmentTree()
 	fc.updateMaxEndChunkIndex()
 	return fc
 }
-
-/*
-// buildSegmentTree constructs the segment tree from sorted chunks
-func (fc *fileContent) buildSegmentTree() {
-	if len(fc.chunks) == 0 {
-		return
-	}
-
-	fc.tree = &segmentTree{}
-	fc.tree.root = fc.buildTreeNode(0, len(fc.chunks)-1)
-}
-
-func (fc *fileContent) buildTreeNode(start, end int) *segmentNode {
-	if start > end {
-		return nil
-	}
-
-	node := &segmentNode{}
-
-	if start == end {
-		chunk := &fc.chunks[start]
-		node.start = chunk.offset
-		node.end = chunk.offset + chunk.size
-		node.chunk = chunk
-		return node
-	}
-
-	mid := (start + end) / 2
-	node.left = fc.buildTreeNode(start, mid)
-	node.right = fc.buildTreeNode(mid+1, end)
-
-	node.start = node.left.start
-	if node.right != nil {
-		node.end = node.right.end
-	} else {
-		node.end = node.left.end
-	}
-
-	return node
-}
-*/
 
 // updateMaxEndChunkIndex 更新 maxEndChunkIndex
 func (fc *fileContent) updateMaxEndChunkIndex() {
@@ -105,84 +51,6 @@ func (fc *fileContent) updateMaxEndChunkIndex() {
 
 	fc.endChunkIndex = maxIndex
 }
-
-/*
-// findChunkAt finds the chunk containing the given position
-func (fc *fileContent) findChunkAt(position int64) *fileChunk {
-	if fc.tree == nil || fc.tree.root == nil {
-		return nil
-	}
-	return fc.findChunkInNode(fc.tree.root, position)
-}
-
-func (fc *fileContent) findChunkInNode(node *segmentNode, position int64) *fileChunk {
-	if node == nil || position < node.start || position >= node.end {
-		return nil
-	}
-
-	if node.chunk != nil {
-		return node.chunk
-	}
-
-	if node.left != nil && position < node.left.end {
-		return fc.findChunkInNode(node.left, position)
-	}
-	return fc.findChunkInNode(node.right, position)
-}
-
-// ChunkRange represents a range within a chunk
-type ChunkRange struct {
-	Chunk *fileChunk
-	Start int64 // Start offset within the chunk
-	End   int64 // End offset within the chunk
-}
-
-// findChunksInRange finds all chunks that overlap with the given range
-func (fc *fileContent) findChunksInRange(start, end int64) []ChunkRange {
-	if fc.tree == nil || fc.tree.root == nil {
-		return nil
-	}
-
-	var ranges []ChunkRange
-	fc.findRangesInNode(fc.tree.root, start, end, &ranges)
-	return ranges
-}
-
-func (fc *fileContent) findRangesInNode(node *segmentNode, start, end int64, ranges *[]ChunkRange) {
-	if node == nil || end < node.start || start >= node.end {
-		return
-	}
-
-	if node.chunk != nil {
-		// Calculate the overlap range
-		rangeStart := max(start, node.chunk.offset)
-		rangeEnd := min(end, node.chunk.offset+node.chunk.size)
-
-		*ranges = append(*ranges, ChunkRange{
-			Chunk: node.chunk,
-			Start: rangeStart - node.chunk.offset, // Convert to chunk-relative offset
-			End:   rangeEnd - node.chunk.offset,   // Convert to chunk-relative offset
-		})
-		return
-	}
-
-	fc.findRangesInNode(node.left, start, end, ranges)
-	fc.findRangesInNode(node.right, start, end, ranges)
-}
-
-func max(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
-}*/
 
 // Len 返回文件内容的总长度
 func (fc *fileContent) Len() int64 {
@@ -243,6 +111,47 @@ func (fc *fileContent) Truncate(fs *SQLiteFS, fileID EntryID, size int64) error 
 	return nil
 }
 
+func (fc *fileContent) Read(fs *SQLiteFS, fileID EntryID, p []byte, offset int64) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	// 从 segment tree 中查询
+	chunkSegments := fc.chunkIndex.QueryRange(offset, offset+int64(len(p)))
+
+	fmt.Printf("Read: 查询范围 [%d, %d), 找到 %d 个段\n", offset, offset+int64(len(p)), len(chunkSegments))
+
+	// 如果没有找到任何段，返回错误
+	if len(chunkSegments) == 0 {
+		return 0, fmt.Errorf("no chunks found for range [%d, %d)", offset, offset+int64(len(p)))
+	}
+
+	// 用于跟踪已读取的字节数
+	totalBytesRead := 0
+
+	// 遍历所有段
+	for _, seg := range chunkSegments {
+		// 获取对应的 chunk
+		chunk := fc.chunks[seg.ChunkIndex]
+
+		// 计算在当前 chunk 中的读取范围
+		chunkStart := chunk.offset + seg.Delta
+		chunkEnd := chunk.offset + chunk.size
+		readStart := max(offset, chunkStart)
+		readEnd := min(offset+int64(len(p)), chunkEnd)
+
+		// 计算读取的字节数和在目标缓冲区中的偏移
+		bytesToRead := int(readEnd - readStart)
+		// bufOffset := int(readStart - offset)
+		chunkOffset := int(readStart - chunk.offset)
+
+		fmt.Printf("读取 block %d: offset=%d, size=%d, chunkOffset=%d, bytesToRead=%d\n",
+			chunk.blockID, chunk.blockOffset, chunk.size, chunkOffset, bytesToRead)
+	}
+	panic("implement me")
+	return totalBytesRead, nil
+}
+
 // Write implements io.Writer interface
 func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int64) (n int, err error) {
 	if len(p) == 0 {
@@ -276,6 +185,9 @@ func (fc *fileContent) Write(fs *SQLiteFS, fileID EntryID, p []byte, offset int6
 	if fc.endChunkIndex < 0 || newEnd > fc.chunks[fc.endChunkIndex].offset+fc.chunks[fc.endChunkIndex].size {
 		fc.endChunkIndex = newIndex
 	}
+
+	// 更新到 chunkIndex
+	fc.chunkIndex.UpdateChunks([]fileChunk{chunk})
 
 	// fc.buildSegmentTree()
 	return int(rs.BytesWritten), nil
