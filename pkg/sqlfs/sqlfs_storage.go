@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -730,14 +731,52 @@ func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChu
 	// 合并连续的chunk: 如果前后chunks中两个 chunk 的 entryID 相同，
 	//		且 前一个 offset + size 正好是下一个的 offset 则合并
 	maxSizes := make(map[EntryID]int64)
+
+	// 按文件ID和偏移量排序chunks，以便合并连续的chunks
+	sort.Slice(chunks, func(i, j int) bool {
+		if chunks[i].fileID != chunks[j].fileID {
+			return chunks[i].fileID < chunks[j].fileID
+		}
+		return chunks[i].offset < chunks[j].offset
+	})
+
+	// 合并连续的chunks并计算最大大小
+	mergedChunks := make([]*PendingChunk, 0, len(chunks))
+	var current *PendingChunk
+
 	for _, chunk := range chunks {
 		// 计算最大大小
 		endOffset := chunk.offset + chunk.size
 		if current, exists := maxSizes[chunk.fileID]; !exists || endOffset > current {
 			maxSizes[chunk.fileID] = endOffset
 		}
+
+		// 尝试合并chunks
+		if current == nil {
+			current = chunk
+			mergedChunks = append(mergedChunks, current)
+			continue
+		}
+
+		// 如果当前chunk和前一个chunk属于同一个文件且连续，则合并
+		if current.fileID == chunk.fileID &&
+			current.blockID == chunk.blockID &&
+			current.blockOffset+current.size == chunk.blockOffset &&
+			current.offset+current.size == chunk.offset &&
+			current.bufferOffset+int(current.size) == chunk.bufferOffset {
+			// 合并chunks
+			current.size += chunk.size
+		} else {
+			// 不能合并，添加为新的chunk
+			current = chunk
+			mergedChunks = append(mergedChunks, current)
+		}
 	}
-	// 3. 写入 file_chunks 表， 暂时不启用 crc32
+
+	// 使用合并后的chunks替换原始chunks
+	chunks = mergedChunks
+
+	// 3. 写入 file_chunks 表
 	stmt, _, err = s.conn.Prepare(`
 		INSERT INTO file_chunks (entry_id, offset, size, block_id, block_offset)
 		VALUES (?, ?, ?, ?, ?)
