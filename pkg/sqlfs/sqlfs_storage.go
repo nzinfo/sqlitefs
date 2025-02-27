@@ -174,7 +174,7 @@ func newStorage(dbName string) (*storage, error) {
 		conn:             conn,
 		writeBuffers:     make([]*WriteBuffer, DefaultBufferNum),
 		writeBufferIndex: 0, // 检查缓冲区时，最先检查是否可用的位置，实际需要  % DefaultBufferNum
-		controlChan:      make(chan flushSignal, 1),
+		controlChan:      make(chan flushSignal, DefaultBufferNum+1),
 		workerDone:       make(chan struct{}),
 		entriesCache:     lru.New(1024), // 添加 entries 缓存初始化
 		dirsCache:        lru.New(1024), // 添加 dirs 缓存初始化
@@ -410,9 +410,21 @@ func (s *storage) getAvailableBuffer(dataSize int) (*WriteBuffer, int) {
 				return buffer, idx
 			}
 			fmt.Printf("getAvailableBuffer: 缓冲区[%d]空间不足，剩余空间=%d，需要空间=%d\n", idx, remainSpace, dataSize)
-		} else {
-			fmt.Printf("getAvailableBuffer: 缓冲区[%d]状态=%d，不可用\n", idx, buffer.state)
 		}
+		// else {
+		//	fmt.Printf("getAvailableBuffer: 缓冲区[%d]状态=%d，不可用\n", idx, buffer.state)
+		//}
+
+		// 处理 state == Full 的情况
+		if buffer.state == bufferFull {
+			fmt.Printf("getAvailableBuffer: 缓冲区[%d]状态=%d，已满，触发异步刷新\n", idx, buffer.state)
+			s.triggerFlush()
+			s.writeBufferIndex = (idx + 1) % DefaultBufferNum
+			checkedCount = 0
+			buffer.lock.Unlock()
+			continue
+		}
+
 		// 特殊处理 buffer 的状态，如果剩余空间不足 4K 则标记为 full, 并激活更新
 		if (buffer.state == bufferWriting) && (DefaultBufferSize-buffer.position < AlignSize) {
 			buffer.state = bufferFull
@@ -421,7 +433,7 @@ func (s *storage) getAvailableBuffer(dataSize int) (*WriteBuffer, int) {
 			s.triggerFlush()
 
 			//更新下一次检查的起始位置
-			s.writeBufferIndex = idx + 1
+			s.writeBufferIndex = (idx + 1) % DefaultBufferNum
 			checkedCount = 0
 		}
 
@@ -546,7 +558,7 @@ func (s *storage) doFlush() {
 				buffersToFlush = append(buffersToFlush, buffer)
 			}
 			buffer.lock.RUnlock()
-			fmt.Println("Buffer", buffer.blockID, len(buffer.pending), buffer.state, buffer.position)
+			// fmt.Println("Buffer", buffer.blockID, len(buffer.pending), buffer.state, buffer.position)
 		}
 	}
 	s.stateLock.RUnlock()
@@ -574,7 +586,8 @@ func (s *storage) doFlush() {
 func (s *storage) Flush() *AsyncResult[[]BlockID] {
 	result := NewAsyncResult[[]BlockID]()
 
-	go func() {
+	// go func()
+	{
 		// 获取所有需要刷新的缓冲区
 		var buffersToFlush []*WriteBuffer
 		s.stateLock.RLock()
@@ -593,14 +606,21 @@ func (s *storage) Flush() *AsyncResult[[]BlockID] {
 		}
 		s.stateLock.RUnlock()
 
-		fmt.Printf("Flush: 找到 %d 个需要刷新的缓冲区\n", len(buffersToFlush))
-		for i, buffer := range buffersToFlush {
-			buffer.lock.RLock()
-			defer buffer.lock.RUnlock()
+		/*
+			fmt.Printf("Flush: 找到 %d 个需要刷新的缓冲区\n", len(buffersToFlush))
+			for i, buffer := range buffersToFlush {
+				buffer.lock.RLock()
+				defer buffer.lock.RUnlock()
 
-			fmt.Printf("Flush: 缓冲区 %d/%d 状态=%d, 位置=%d, 待处理项=%d\n",
-				i+1, len(buffersToFlush), buffer.state, buffer.position, len(buffer.pending))
-		}
+				fmt.Printf("Flush: 缓冲区 %d/%d 状态=%d, 位置=%d, 待处理项=%d\n",
+					i+1, len(buffersToFlush), buffer.state, buffer.position, len(buffer.pending))
+			}
+		*/
+
+		// 数据库连接加锁
+		//s.connMutex.Lock()
+		//defer s.connMutex.Unlock()
+
 		// 刷新所有缓冲区
 		var blockIDs []BlockID
 		var flushErr error
@@ -635,7 +655,7 @@ func (s *storage) Flush() *AsyncResult[[]BlockID] {
 
 		fmt.Printf("Flush: 完成，共刷新 %d 个块，错误: %v\n", len(blockIDs), flushErr)
 		result.Complete(blockIDs, flushErr)
-	}()
+	} // ()
 
 	return result
 }
@@ -652,7 +672,12 @@ func (s *storage) Close() error {
 
 	fmt.Println("storage Close: flushWorker 已停止")
 
+	fmt.Println("[Lock]storage Close")
+	s.connMutex.Lock()
+	defer s.connMutex.Unlock()
+
 	// 关闭其他资源
+
 	if s.conn != nil {
 		if err := s.conn.Close(); err != nil {
 			return fmt.Errorf("close sqlite connection error: %v", err)
@@ -696,14 +721,11 @@ func (s *storage) triggerFlush() {
 // flushBuffer 将数据写入数据库
 func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChunk) error {
 	fmt.Printf("flushBuffer 开始执行: 数据大小=%d, chunks数量=%d\n", len(data), len(chunks))
-
-	// tx := s.conn.Begin()
-	// defer tx.Rollback()
-
-	// s.maxBlockID++ // 更新最大块ID
-	// blockID := s.maxBlockID
-
-	// fmt.Println("flushBuffer:", blockID, len(data), len(chunks))
+	// s.conn 因为涉及 Prepare / Next 等操作，只能单线程操作
+	// 考虑到代码易用性，约定仅在实际进行数据库操作的函数中 尝试获得锁。
+	fmt.Println("[Lock]flushBuffer")
+	s.connMutex.Lock()
+	defer s.connMutex.Unlock()
 
 	// 1. 写入 blocks 表
 	stmt, _, err := s.conn.Prepare(`
@@ -854,13 +876,4 @@ func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChu
 	// 	return err
 	// }
 	return nil
-}
-
-// 辅助函数，获取 map 的键
-func getMapKeys(m map[EntryID]map[int64]ChunkUpdateInfo) []EntryID {
-	keys := make([]EntryID, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
 }

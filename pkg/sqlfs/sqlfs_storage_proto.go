@@ -25,6 +25,7 @@ func (s *storage) Has(path string) bool {
 }
 
 func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error) {
+
 	path = clean(path)
 
 	if s.Has(path) {
@@ -59,25 +60,69 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 		current = filepath.Dir(current)
 	}
 
-	// Begin transaction 代码中不启用事务
-	// tx := s.conn.Begin()
-	// defer tx.Rollback()
+	// 代码中不启用事务
 
-	// Prepare statement for both directory and file creation
-	stmt, _, err := s.conn.Prepare(`
+	// 新建文件，需要修改。
+	_, err := func() (*AsyncResult[WriteResult], error) {
+		fmt.Println("[Lock]New")
+		s.connMutex.Lock()
+		defer s.connMutex.Unlock()
+
+		// Prepare statement for both directory and file creation
+		stmt, _, err := s.conn.Prepare(`
 		INSERT INTO entries (
 			entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, size, create_at, modify_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`)
-	if err != nil {
-		return nil, fmt.Errorf("prepare statement error: %v", err)
-	}
-	defer stmt.Close()
+		if err != nil {
+			return nil, fmt.Errorf("prepare statement error: %v", err)
+		}
+		defer stmt.Close()
 
-	// Create parent directories if needed
-	for _, dirPath := range dirsToCreate {
-		s.maxEntryID++ // Increment for each new directory
-		dirName := filepath.Base(dirPath)
+		// Create parent directories if needed
+		for _, dirPath := range dirsToCreate {
+			s.maxEntryID++ // Increment for each new directory
+			dirName := filepath.Base(dirPath)
+
+			if err := stmt.BindInt64(1, int64(s.maxEntryID)); err != nil {
+				return nil, fmt.Errorf("bind entry_id error: %v", err)
+			}
+			if err := stmt.BindInt64(2, int64(currentParentID)); err != nil {
+				return nil, fmt.Errorf("bind parent_id error: %v", err)
+			}
+			if err := stmt.BindText(3, dirName); err != nil {
+				return nil, fmt.Errorf("bind name error: %v", err)
+			}
+			if err := stmt.BindInt64(4, int64(os.ModeDir)); err != nil {
+				return nil, fmt.Errorf("bind mode_type error: %v", err)
+			}
+			if err := stmt.BindInt64(5, int64(mode.Perm())); err != nil { // FIXME: 应继承权限，当前版本暂不考虑
+				return nil, fmt.Errorf("bind mode_perm error: %v", err)
+			}
+			if err := stmt.BindInt64(6, 0); err != nil {
+				return nil, fmt.Errorf("bind uid error: %v", err)
+			}
+			if err := stmt.BindInt64(7, 0); err != nil {
+				return nil, fmt.Errorf("bind gid error: %v", err)
+			}
+			if err := stmt.BindText(8, ""); err != nil {
+				return nil, fmt.Errorf("bind target error: %v", err)
+			}
+			if err := stmt.BindInt64(9, 0); err != nil { // 目录大小默认为 0
+				return nil, fmt.Errorf("bind size error: %v", err)
+			}
+
+			if !stmt.Step() {
+				return nil, fmt.Errorf("execute directory creation error: %v", stmt.Err())
+			}
+
+			currentParentID = s.maxEntryID
+			stmt.Reset()
+		}
+
+		// Create the new file using the same statement
+		s.maxEntryID++
+		name := filepath.Base(path)
 
 		if err := stmt.BindInt64(1, int64(s.maxEntryID)); err != nil {
 			return nil, fmt.Errorf("bind entry_id error: %v", err)
@@ -85,13 +130,13 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 		if err := stmt.BindInt64(2, int64(currentParentID)); err != nil {
 			return nil, fmt.Errorf("bind parent_id error: %v", err)
 		}
-		if err := stmt.BindText(3, dirName); err != nil {
+		if err := stmt.BindText(3, name); err != nil {
 			return nil, fmt.Errorf("bind name error: %v", err)
 		}
-		if err := stmt.BindInt64(4, int64(os.ModeDir)); err != nil {
+		if err := stmt.BindInt64(4, int64(mode.Type())); err != nil { // mode&os.ModeType  不一定是常规文件
 			return nil, fmt.Errorf("bind mode_type error: %v", err)
 		}
-		if err := stmt.BindInt64(5, int64(mode.Perm())); err != nil { // FIXME: 应继承权限，当前版本暂不考虑
+		if err := stmt.BindInt64(5, int64(mode.Perm())); err != nil {
 			return nil, fmt.Errorf("bind mode_perm error: %v", err)
 		}
 		if err := stmt.BindInt64(6, 0); err != nil {
@@ -100,89 +145,31 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 		if err := stmt.BindInt64(7, 0); err != nil {
 			return nil, fmt.Errorf("bind gid error: %v", err)
 		}
-		if err := stmt.BindText(8, ""); err != nil {
+		if err := stmt.BindNull(8); err != nil { // NULL for regular file
 			return nil, fmt.Errorf("bind target error: %v", err)
 		}
-		if err := stmt.BindInt64(9, 0); err != nil { // 目录大小默认为 0
+		if err := stmt.BindInt64(9, 0); err != nil { // 新建大小为 0
 			return nil, fmt.Errorf("bind size error: %v", err)
 		}
 
-		if !stmt.Step() {
-			return nil, fmt.Errorf("execute directory creation error: %v", stmt.Err())
+		// fmt.Println("create file:", s.maxEntryID, path, name)
+		if err := stmt.Exec(); err != nil {
+			return nil, err
 		}
+		return nil, nil
+	}()
 
-		currentParentID = s.maxEntryID
-		stmt.Reset()
-	}
-
-	// Create the new file using the same statement
-	s.maxEntryID++
-	name := filepath.Base(path)
-
-	if err := stmt.BindInt64(1, int64(s.maxEntryID)); err != nil {
-		return nil, fmt.Errorf("bind entry_id error: %v", err)
-	}
-	if err := stmt.BindInt64(2, int64(currentParentID)); err != nil {
-		return nil, fmt.Errorf("bind parent_id error: %v", err)
-	}
-	if err := stmt.BindText(3, name); err != nil {
-		return nil, fmt.Errorf("bind name error: %v", err)
-	}
-	if err := stmt.BindInt64(4, int64(mode.Type())); err != nil { // mode&os.ModeType  不一定是常规文件
-		return nil, fmt.Errorf("bind mode_type error: %v", err)
-	}
-	if err := stmt.BindInt64(5, int64(mode.Perm())); err != nil {
-		return nil, fmt.Errorf("bind mode_perm error: %v", err)
-	}
-	if err := stmt.BindInt64(6, 0); err != nil {
-		return nil, fmt.Errorf("bind uid error: %v", err)
-	}
-	if err := stmt.BindInt64(7, 0); err != nil {
-		return nil, fmt.Errorf("bind gid error: %v", err)
-	}
-	if err := stmt.BindNull(8); err != nil { // NULL for regular file
-		return nil, fmt.Errorf("bind target error: %v", err)
-	}
-	if err := stmt.BindInt64(9, 0); err != nil { // 新建大小为 0
-		return nil, fmt.Errorf("bind size error: %v", err)
-	}
-
-	// fmt.Println("create file:", s.maxEntryID, path, name)
-	if err := stmt.Exec(); err != nil {
+	if err != nil {
 		return nil, err
 	}
 
-	// if err := tx.Commit(); err != nil {
-	// 	return nil, fmt.Errorf("commit transaction error: %v", err)
-	// }
-	/*
-		{
-			stmt, _, err := s.conn.Prepare(`SELECT entry_id, parent_id, name FROM entries Where parent_id = ?`)
-			if err != nil {
-				return nil, fmt.Errorf("query error: %v", err)
-			}
-			defer stmt.Close()
-
-			if err := stmt.BindInt64(1, int64(currentParentID)); err != nil {
-				return nil, fmt.Errorf("bind parent_id error: %v", err)
-			}
-
-			for stmt.Step() {
-				var entryID, parentID int64
-				var name string
-				entryID = stmt.ColumnInt64(0)
-				parentID = stmt.ColumnInt64(1)
-				name = stmt.ColumnText(2)
-				fmt.Println("entry===:", entryID, parentID, name)
-			}
-		}
-	*/
 	// 需要清除 path 对应记录的 parent id 的 cache
 	s.entriesCache.Remove(path)
 	s.dirsCache.Remove(currentParentID)
 	return s.getEntry(path) // 从数据库中再次加载
 }
 
+/*
 func (s *storage) createParent(path string, mode fs.FileMode, f *file) error {
 	base := filepath.Dir(path)
 	base = clean(base)
@@ -196,6 +183,7 @@ func (s *storage) createParent(path string, mode fs.FileMode, f *file) error {
 
 	return s.createParent(base, mode.Perm()|os.ModeDir, f)
 }
+*/
 
 func (s *storage) Children(path string) (*[]fileInfo, error) {
 	path = clean(path)
@@ -276,8 +264,10 @@ func (s *storage) Rename(from, to string) error {
 	}
 
 	// 4. 修改 from 的 parent ID 和 name
-	// tx := s.conn.Begin()
-	// defer tx.Rollback()
+	// 获取锁
+	fmt.Println("[Lock]Rename")
+	s.connMutex.Lock()
+	defer s.connMutex.Unlock()
 
 	stmt, _, err := s.conn.Prepare(`
 		UPDATE entries 
@@ -330,6 +320,7 @@ func (s *storage) Rename(from, to string) error {
 }
 
 func (s *storage) Remove(path string) error {
+
 	path = clean(path)
 
 	f, err := s.getEntry(path)
@@ -347,10 +338,11 @@ func (s *storage) Remove(path string) error {
 		}
 	}
 
-	// 开始事务删除
-	// tx := s.conn.Begin()
-	// defer tx.Rollback()
+	fmt.Println("[Lock]Remove")
+	s.connMutex.Lock()
+	defer s.connMutex.Unlock()
 
+	// 开始事务删除
 	stmt, _, err := s.conn.Prepare(`
 		DELETE FROM entries 
 		WHERE entry_id = ?
@@ -451,6 +443,10 @@ func (s *storage) LoadFileChunks(fileID EntryID) *AsyncResult[[]fileChunk] {
 }
 
 func (s *storage) loadFileChunksSync(fileID EntryID) ([]fileChunk, error) {
+	fmt.Println("[Lock][Read]loadFileChunksSync")
+	s.connMutex.RLock()
+	defer s.connMutex.RUnlock()
+
 	stmt, _, err := s.conn.Prepare(`
 		SELECT rowid, offset, size, block_id, block_offset
 		FROM file_chunks
@@ -562,8 +558,6 @@ func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
 	result := NewAsyncResult[error]()
 
 	go func() {
-		// tx := s.conn.Begin()
-		// defer tx.Rollback()
 
 		if size == 0 {
 			// 特殊处理：删除所有chunks
@@ -573,6 +567,10 @@ func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
 				return
 			}
 		} else {
+			fmt.Println("[Lock]FileTruncate")
+			s.connMutex.Lock()
+			defer s.connMutex.Unlock()
+
 			// 1. 删除完全在截断点后的chunks
 			stmt, _, err := s.conn.Prepare(`
 				DELETE FROM file_chunks 
@@ -670,6 +668,11 @@ func (s *storage) deleteAllChunksInTx(tx *sqlite3.Conn, fileID EntryID) error {
 }
 
 func (s *storage) loadEntriesByParentSync(parentID EntryID, parentPath string) ([]fileInfo, error) {
+	// 获得锁
+	fmt.Println("[Lock][Read]loadEntriesByParentSync")
+	s.connMutex.RLock()
+	defer s.connMutex.RUnlock()
+
 	stmt, tail, err := s.conn.Prepare(`
 		SELECT entry_id, parent_id, name, mode_type, mode_perm, uid, gid, target, size,create_at, modify_at
 		FROM entries
@@ -741,7 +744,8 @@ func (s *storage) getBlock(blockID BlockID) (data []byte, inWriteBuffer bool, er
 		return value.([]byte), false, nil
 	}
 
-	// 从数据库中加载
+	// 获得锁
+	fmt.Println("[Lock][Read]getBlock")
 	s.connMutex.RLock()
 	defer s.connMutex.RUnlock()
 

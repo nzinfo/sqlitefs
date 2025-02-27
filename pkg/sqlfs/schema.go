@@ -54,11 +54,12 @@ func InitDatabase(conn *sqlite3.Conn) error {
 			block_offset INTEGER NOT NULL,  -- offset in block
 			crc32 INTEGER DEFAULT 0,   -- checksum for data integrity
 			create_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (entry_id, offset),
 			FOREIGN KEY(entry_id) REFERENCES entries(entry_id),
 			FOREIGN KEY(block_id) REFERENCES blocks(block_id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_chunks_block ON file_chunks(block_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_chunks_offset ON file_chunks(entry_id, offset)`,
+		// 不可以使用 entry_id + offset 作为主键，因为存在覆盖写的情况。
 
 		// Create root directory if it doesn't exist
 		`INSERT OR IGNORE INTO entries (
