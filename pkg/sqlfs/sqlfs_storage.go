@@ -732,6 +732,8 @@ func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChu
 	//		且 前一个 offset + size 正好是下一个的 offset 则合并
 	maxSizes := make(map[EntryID]int64)
 
+	// fmt.Printf("flushBuffer: 开始处理 %d 个chunks\n", len(chunks))
+
 	// 按文件ID和偏移量排序chunks，以便合并连续的chunks
 	sort.Slice(chunks, func(i, j int) bool {
 		if chunks[i].fileID != chunks[j].fileID {
@@ -739,6 +741,13 @@ func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChu
 		}
 		return chunks[i].offset < chunks[j].offset
 	})
+	/*
+		fmt.Println("排序后的chunks:")
+		for i, chunk := range chunks {
+			fmt.Printf("  [%d] fileID=%d, offset=%d, size=%d, blockID=%d, blockOffset=%d, bufferOffset=%d\n",
+				i, chunk.fileID, chunk.offset, chunk.size, chunk.blockID, chunk.blockOffset, chunk.bufferOffset)
+		}
+	*/
 
 	// 合并连续的chunks并计算最大大小
 	mergedChunks := make([]*PendingChunk, 0, len(chunks))
@@ -755,23 +764,49 @@ func (s *storage) flushBuffer(blockID BlockID, data []byte, chunks []*PendingChu
 		if current == nil {
 			current = chunk
 			mergedChunks = append(mergedChunks, current)
+			// fmt.Printf("首个chunk: fileID=%d, offset=%d, size=%d, blockID=%d, blockOffset=%d, bufferOffset=%d\n",
+			// 	current.fileID, current.offset, current.size, current.blockID, current.blockOffset, current.bufferOffset)
 			continue
 		}
 
-		// 如果当前chunk和前一个chunk属于同一个文件且连续，则合并
-		if current.fileID == chunk.fileID &&
-			current.blockID == chunk.blockID &&
-			current.blockOffset+current.size == chunk.blockOffset &&
+		// 检查是否可以合并
+		canMerge := current.fileID == chunk.fileID &&
+			current.blockID == chunk.blockID && // 不需要检查 blockOffset， 当前上下文对应的是 bufferOffset
 			current.offset+current.size == chunk.offset &&
-			current.bufferOffset+int(current.size) == chunk.bufferOffset {
+			current.bufferOffset+int(current.size) == chunk.bufferOffset
+		/*
+			fmt.Printf("检查合并条件:\n")
+			fmt.Printf("  当前chunk: fileID=%d, offset=%d, size=%d, blockID=%d, blockOffset=%d, bufferOffset=%d\n",
+				current.fileID, current.offset, current.size, current.blockID, current.blockOffset, current.bufferOffset)
+			fmt.Printf("  新chunk: fileID=%d, offset=%d, size=%d, blockID=%d, blockOffset=%d, bufferOffset=%d\n",
+				chunk.fileID, chunk.offset, chunk.size, chunk.blockID, chunk.blockOffset, chunk.bufferOffset)
+			fmt.Printf("  条件检查:\n")
+			fmt.Printf("    - 相同fileID: %v\n", current.fileID == chunk.fileID)
+			fmt.Printf("    - 相同blockID: %v\n", current.blockID == chunk.blockID)
+			fmt.Printf("    - 连续blockOffset: %v (current=%d + size=%d == chunk=%d)\n",
+				current.blockOffset+current.size == chunk.blockOffset,
+				current.blockOffset, current.size, chunk.blockOffset)
+			fmt.Printf("    - 连续文件offset: %v (current=%d + size=%d == chunk=%d)\n",
+				current.offset+current.size == chunk.offset,
+				current.offset, current.size, chunk.offset)
+			fmt.Printf("    - 连续bufferOffset: %v (current=%d + size=%d == chunk=%d)\n",
+				current.bufferOffset+int(current.size) == chunk.bufferOffset,
+				current.bufferOffset, current.size, chunk.bufferOffset)
+			fmt.Printf("  可以合并: %v\n", canMerge)
+		*/
+		if canMerge {
 			// 合并chunks
 			current.size += chunk.size
+			// fmt.Printf("合并完成: 新size=%d\n", current.size)
 		} else {
 			// 不能合并，添加为新的chunk
 			current = chunk
 			mergedChunks = append(mergedChunks, current)
+			// fmt.Printf("无法合并，添加新chunk\n")
 		}
 	}
+
+	// fmt.Printf("合并完成: 从 %d 个chunks合并为 %d 个\n", len(chunks), len(mergedChunks))
 
 	// 使用合并后的chunks替换原始chunks
 	chunks = mergedChunks
