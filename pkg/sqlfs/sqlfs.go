@@ -119,17 +119,26 @@ func (fs *SQLiteFS) closeFile(fi *fileInfo) {
 }
 
 func (fs *SQLiteFS) Close() error {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
 	// FIXME: 当前的实现存在问题，因日志系统缺失， Close 过程中的 error 难以暴露。
 
 	// 关闭所有打开的文件
-	for entryID, f := range fs.openFiles {
+	// 需要先构造 file list 避免 Concurrent modification
+	fileList := make([]*file, 0, len(fs.openFiles))
+	for _, f := range fs.openFiles {
+		fileList = append(fileList, f)
+	}
+
+	for _, f := range fileList {
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("failed to close file: %v", err)
 		}
-		delete(fs.openFiles, entryID)
+		// 不需要删除文件，因为 Close 会将文件从内存中删除。
+		// delete(fs.openFiles, entryID)
 	}
+
+	// f.Close
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
 
 	// 等待刷新完成
 	// fmt.Println("Close: 刷新存储")
