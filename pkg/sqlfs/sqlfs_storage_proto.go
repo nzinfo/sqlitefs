@@ -81,6 +81,15 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 
 		// Create parent directories if needed
 		for _, dirPath := range dirsToCreate {
+			// Check if directory already exists (could happen in concurrent operations)
+			if entry, err := s.getEntry(dirPath); err == nil {
+				if entry.mode&os.ModeDir == 0 {
+					return nil, fmt.Errorf("path component %q exists but is not a directory", dirPath)
+				}
+				currentParentID = entry.entryID
+				continue
+			}
+			
 			s.maxEntryID++ // Increment for each new directory
 			dirName := filepath.Base(dirPath)
 
@@ -112,12 +121,18 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 				return nil, fmt.Errorf("bind size error: %v", err)
 			}
 
-			if !stmt.Step() {
+			stmt.Step()
+			if stmt.Err() != nil {
 				return nil, fmt.Errorf("execute directory creation error: %v", stmt.Err())
 			}
 
 			currentParentID = s.maxEntryID
 			stmt.Reset()
+		}
+
+		// If we're creating a directory and it's the same as the path, we're done
+		if mode&os.ModeDir != 0 && len(dirsToCreate) > 0 && dirsToCreate[len(dirsToCreate)-1] == path {
+			return nil, nil
 		}
 
 		// Create the new file using the same statement
@@ -153,8 +168,9 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 		}
 
 		// fmt.Println("create file:", s.maxEntryID, path, name)
-		if err := stmt.Exec(); err != nil {
-			return nil, err
+		stmt.Step()
+		if stmt.Err() != nil {
+			return nil, fmt.Errorf("execute file creation error: %v", stmt.Err())
 		}
 		return nil, nil
 	}()
@@ -289,7 +305,8 @@ func (s *storage) Rename(from, to string) error {
 		return fmt.Errorf("bind entry_id error: %v", err)
 	}
 
-	if err := stmt.Exec(); err != nil {
+	stmt.Step()
+	if stmt.Err() != nil {
 		return fmt.Errorf("execute rename error: %v", stmt.Err())
 	}
 
@@ -356,7 +373,8 @@ func (s *storage) Remove(path string) error {
 		return fmt.Errorf("bind entry_id error: %v", err)
 	}
 
-	if err := stmt.Exec(); err != nil {
+	stmt.Step()
+	if stmt.Err() != nil {
 		return fmt.Errorf("execute delete error: %v", stmt.Err())
 	}
 
@@ -540,8 +558,9 @@ func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
 				return
 			}
 
-			if err := stmt.Exec(); err != nil {
-				result.Complete(nil, fmt.Errorf("execute delete error: %v", err))
+			stmt.Step()
+			if stmt.Err() != nil {
+				result.Complete(nil, fmt.Errorf("execute delete error: %v", stmt.Err()))
 				return
 			}
 
@@ -576,8 +595,9 @@ func (s *storage) FileTruncate(fileID EntryID, size int64) *AsyncResult[error] {
 				return
 			}
 
-			if err := stmt.Exec(); err != nil {
-				result.Complete(nil, fmt.Errorf("execute update error: %v", err))
+			stmt.Step()
+			if stmt.Err() != nil {
+				result.Complete(nil, fmt.Errorf("execute update error: %v", stmt.Err()))
 				return
 			}
 		}
@@ -609,8 +629,9 @@ func (s *storage) deleteAllChunksInTx(tx *sqlite3.Conn, fileID EntryID) error {
 		return fmt.Errorf("bind file_id error: %v", err)
 	}
 
-	if err := stmt.Exec(); err != nil {
-		return fmt.Errorf("execute delete all chunks error: %v", err)
+	stmt.Step()
+	if stmt.Err() != nil {
+		return fmt.Errorf("execute delete all chunks error: %v", stmt.Err())
 	}
 
 	return nil
@@ -710,7 +731,8 @@ func (s *storage) getBlock(blockID BlockID) (data []byte, inWriteBuffer bool, er
 		return nil, false, fmt.Errorf("failed to bind block_id: %w", err)
 	}
 
-	if !stmt.Step() {
+	stmt.Step()
+	if stmt.Err() != nil {
 		return nil, false, fmt.Errorf("block %d not found", blockID)
 	}
 
