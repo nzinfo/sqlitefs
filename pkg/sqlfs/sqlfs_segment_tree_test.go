@@ -16,8 +16,10 @@ func TestNewSegmentTree(t *testing.T) {
 		t.Fatal("Failed to create segment tree")
 	}
 
-	if len(st.segments) != 3 {
-		t.Errorf("Expected 3 segments, got %d", len(st.segments))
+	// 新实现不再有segments字段，所以我们通过查询来验证
+	segments := st.QueryRange(0, 350)
+	if len(segments) != 3 {
+		t.Errorf("Expected 3 segments, got %d", len(segments))
 	}
 
 	if st.chunkCount != 3 {
@@ -125,11 +127,7 @@ func TestUpdateChunks(t *testing.T) {
 		t.Errorf("Expected chunkCount to be 3, got %d", st.chunkCount)
 	}
 
-	if len(st.segments) != 3 {
-		t.Errorf("Expected 3 segments, got %d", len(st.segments))
-	}
-
-	// Test querying after update
+	// 新实现不再有segments字段，所以我们通过查询来验证
 	segments := st.QueryRange(0, 350)
 	expectedCount := 3
 	if len(segments) != expectedCount {
@@ -195,6 +193,34 @@ func TestGetSegmentsToRead(t *testing.T) {
 	})
 }
 
+func TestEmptySegmentTree(t *testing.T) {
+	st := NewSegmentTree(nil)
+
+	if st == nil {
+		t.Fatal("Failed to create empty segment tree")
+	}
+
+	// 新实现不再有segments字段，所以我们通过查询来验证
+	segments := st.QueryRange(0, 100)
+	if len(segments) != 0 {
+		t.Errorf("Expected 0 segments from query, got %d", len(segments))
+	}
+
+	// Test updating empty tree
+	chunks := []fileChunk{
+		{offset: 0, size: 100},
+	}
+
+	st.UpdateChunks(chunks)
+
+	// 新实现不再有segments字段，所以我们通过查询来验证
+	segments = st.QueryRange(0, 100)
+	if len(segments) != 1 {
+		t.Errorf("Expected 1 segment from query after update, got %d", len(segments))
+	}
+}
+
+// TestMergeOverlappingSegments 测试合并重叠段的功能
 func TestMergeOverlappingSegments(t *testing.T) {
 	segments := []ChunkSegment{
 		{Start: 0, End: 100, ChunkIndex: 0, Delta: 0},
@@ -202,7 +228,8 @@ func TestMergeOverlappingSegments(t *testing.T) {
 		{Start: 200, End: 250, ChunkIndex: 2, Delta: 0},
 	}
 
-	merged := MergeOverlappingSegments(segments)
+	st := &SegmentTree{}
+	merged := st.mergeOverlappingSegments(segments)
 
 	// After merging, we should have:
 	// 1. [0, 50) from chunk 0
@@ -230,38 +257,5 @@ func TestMergeOverlappingSegments(t *testing.T) {
 	if len(merged) > 2 && (merged[2].Start != 200 || merged[2].End != 250 || merged[2].ChunkIndex != 2) {
 		t.Errorf("Third segment incorrect: got [%d, %d) ChunkIndex=%d, expected [200, 250) ChunkIndex=2",
 			merged[2].Start, merged[2].End, merged[2].ChunkIndex)
-	}
-}
-
-func TestEmptySegmentTree(t *testing.T) {
-	st := NewSegmentTree(nil)
-
-	if st == nil {
-		t.Fatal("Failed to create empty segment tree")
-	}
-
-	if len(st.segments) != 0 {
-		t.Errorf("Expected 0 segments, got %d", len(st.segments))
-	}
-
-	segments := st.QueryRange(0, 100)
-	if len(segments) != 0 {
-		t.Errorf("Expected 0 segments from query, got %d", len(segments))
-	}
-
-	// Test updating empty tree
-	chunks := []fileChunk{
-		{offset: 0, size: 100},
-	}
-
-	st.UpdateChunks(chunks)
-
-	if len(st.segments) != 1 {
-		t.Errorf("Expected 1 segment after update, got %d", len(st.segments))
-	}
-
-	segments = st.QueryRange(0, 100)
-	if len(segments) != 1 {
-		t.Errorf("Expected 1 segment from query after update, got %d", len(segments))
 	}
 }

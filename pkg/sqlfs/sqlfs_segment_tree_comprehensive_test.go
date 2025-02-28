@@ -12,7 +12,8 @@ import (
 func TestSegmentTreeBasic(t *testing.T) {
 	t.Run("Empty tree", func(t *testing.T) {
 		st := NewSegmentTree(nil)
-		assert.Equal(t, 0, len(st.segments))
+		segments := st.QueryRange(0, 100)
+		assert.Equal(t, 0, len(segments))
 	})
 
 	t.Run("Single chunk", func(t *testing.T) {

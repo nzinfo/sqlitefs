@@ -253,10 +253,12 @@ func (st *SegmentTree) insertNode(node *AVLNode, segment ChunkSegment) *AVLNode 
 	return node
 }
 
+/*
 // overlaps 检查两个线段是否重叠
 func overlaps(a, b ChunkSegment) bool {
 	return a.Start < b.End && b.Start < a.End
 }
+*/
 
 // queryRangeRecursive 递归查询指定范围内的所有线段
 func (st *SegmentTree) queryRangeRecursive(node *AVLNode, start, end int64, result *[]ChunkSegment) {
@@ -304,10 +306,9 @@ func (st *SegmentTree) queryRangeRecursive(node *AVLNode, start, end int64, resu
 	}
 }
 
-// sortSegments 对线段按照起始位置排序，如果起始位置相同则按ChunkIndex排序
+// sortSegments 对线段进行排序，先按起始位置排序，再按ChunkIndex排序
 func sortSegments(segments []ChunkSegment) {
-	// 使用稳定排序算法确保相同起始位置的段保持原有顺序
-	// 首先按ChunkIndex排序
+	// 首先按ChunkIndex排序，确保最新的chunk在后面
 	for i := 0; i < len(segments); i++ {
 		for j := i + 1; j < len(segments); j++ {
 			if segments[i].ChunkIndex > segments[j].ChunkIndex {
