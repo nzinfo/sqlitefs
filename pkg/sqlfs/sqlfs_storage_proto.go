@@ -61,6 +61,7 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 	}
 
 	// 代码中不启用事务
+	// fmt.Println("dirsToCreate:", dirsToCreate)
 
 	// 新建文件，需要修改。
 	_, err := func() (*AsyncResult[WriteResult], error) {
@@ -112,9 +113,12 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 				return nil, fmt.Errorf("bind size error: %v", err)
 			}
 
-			if !stmt.Step() {
+			stmt.Step()
+			if stmt.Err() != nil {
 				return nil, fmt.Errorf("execute directory creation error: %v", stmt.Err())
 			}
+			// 需要清空父目录的缓存
+			s.dirsCache.Remove(currentParentID)
 
 			currentParentID = s.maxEntryID
 			stmt.Reset()
@@ -166,6 +170,7 @@ func (s *storage) New(path string, mode fs.FileMode, flag int) (*fileInfo, error
 	// 需要清除 path 对应记录的 parent id 的 cache
 	s.entriesCache.Remove(path)
 	s.dirsCache.Remove(currentParentID)
+	// fmt.Println("ReloadEntry:", path, currentParentID)
 	return s.getEntry(path) // 从数据库中再次加载
 }
 
