@@ -32,10 +32,10 @@ type Filesystem interface {
 
 // Memory a very convenient filesystem based on memory files.
 type SQLiteFS struct {
-	s         *storage
-	mu        sync.Mutex
-	openFiles map[EntryID]*file
-
+	s               *storage
+	mu              sync.Mutex
+	openFiles       map[FileHandler]*file
+	nextFileHandler FileHandler
 	// 用于管理 chunk 更新的字段
 	// updateMu       sync.Mutex
 	// pendingUpdates map[EntryID]map[int64]ChunkUpdateInfo
@@ -50,8 +50,9 @@ func NewSQLiteFS(dbName string) (Filesystem, billy.Filesystem, error) {
 		return nil, nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	fs := &SQLiteFS{
-		s:         s,
-		openFiles: make(map[EntryID]*file),
+		s:               s,
+		openFiles:       make(map[FileHandler]*file),
+		nextFileHandler: 4, // stdin / stdout / stderr
 		// pendingUpdates: make(map[EntryID]map[int64]ChunkUpdateInfo),
 		// updateDone:     make(chan struct{}),
 	}
@@ -102,12 +103,17 @@ func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy
 	if f.mode.IsDir() {
 		return nil, fmt.Errorf("cannot open directory: %s", filename)
 	}
-	// 检查缓存
-	if file, ok := fs.openFiles[f.entryID]; ok {
-		// 重置位置, 理论上 应该额外复制一份文件描述符。
-		file.position = 0
-		fmt.Println("open from cache, chunks loading:", filename, len(file.content.chunks))
-		return file, nil
+	// 检查缓存, 如果一个文件的内容还在内存中，为性能考虑，不应该强制刷新到磁盘，此时需要 alias content
+	for _, file := range fs.openFiles {
+		if file.fileInfo.entryID == f.entryID {
+			// 需要复制一份文件描述符
+			file = file.Dup(f)
+			// 分配新的文件描述符
+			file.handler = fs.nextFileHandler
+			fs.nextFileHandler++
+			fs.openFiles[file.handler] = file
+			return file, nil
+		}
 	}
 
 	// 仅有 fileInfo 不足以打开文件，需要加载文件的 chunks, 这个过程应该是异步的。
@@ -115,14 +121,19 @@ func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy
 	if err != nil {
 		return nil, err
 	}
-	fs.openFiles[f.entryID] = file
+
+	// 分配新的 Hanlder.
+	file.handler = fs.nextFileHandler
+	fs.nextFileHandler++
+
+	fs.openFiles[file.handler] = file
 	return file, nil
 }
 
-func (fs *SQLiteFS) closeFile(fi *fileInfo) {
+func (fs *SQLiteFS) closeFile(handler FileHandler) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	delete(fs.openFiles, fi.entryID)
+	delete(fs.openFiles, handler)
 }
 
 func (fs *SQLiteFS) Close() error {

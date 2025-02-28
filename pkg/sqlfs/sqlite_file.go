@@ -12,6 +12,7 @@ import (
 // 定义为 file，实现 billy.File 约定的接口
 type file struct {
 	fs       *SQLiteFS
+	handler  FileHandler
 	fileInfo *fileInfo
 	flag     int
 	mode     os.FileMode
@@ -28,6 +29,7 @@ func OpenFile(fs *SQLiteFS, fileInfo *fileInfo, flag int, perm os.FileMode) (*fi
 	}
 
 	content := newFileContent(chunks)
+	// TODO: 需要考虑如何分配 Handler
 	return &file{
 		fs:       fs,
 		fileInfo: fileInfo,
@@ -137,13 +139,24 @@ func (f *file) Close() error {
 	// 在关闭文件前，确保处理所有待更新的 chunk
 	// f.fs.processAllPendingUpdates()
 
-	f.fs.closeFile(f.fileInfo) // 通知文件系统文件关闭
+	f.fs.closeFile(f.handler) // 通知文件系统文件关闭
 	f.fileInfo = nil
 	return nil
 }
 
 func (f *file) Truncate(size int64) error {
 	return f.content.Truncate(f.fs, f.fileInfo.entryID, size)
+}
+
+func (f *file) Dup(fi *fileInfo) *file {
+	return &file{
+		fs:       f.fs,
+		fileInfo: fi,
+		flag:     f.flag,
+		mode:     f.mode,
+		position: 0,
+		content:  f.content,
+	}
 }
 
 func (f *file) Duplicate(filename string, mode fs.FileMode, flag int) billy.File {
