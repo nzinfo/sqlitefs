@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/nzinfo/go-sqlfs/pkg/sqlfs"
 )
@@ -37,11 +36,4 @@ func cmdCat(dbName string, mirrorPath string, args []string) {
 	}
 
 	fmt.Printf("Contents of %s:\n%s\n", file, content)
-
-	if mirrorPath != "" {
-		if err := os.WriteFile(filepath.Join(mirrorPath, file), content, 0666); err != nil {
-			fmt.Printf("Failed to create mirror file: %v\n", err)
-			os.Exit(1)
-		}
-	}
 }

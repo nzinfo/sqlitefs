@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/nzinfo/go-sqlfs/pkg/sqlfs"
 )
@@ -27,13 +26,5 @@ func cmdMkdir(dbName string, mirrorPath string, args []string) {
 		fmt.Printf("Failed to create directory: %v\n", err)
 		os.Exit(1)
 	}
-
-	if mirrorPath != "" {
-		if err := os.MkdirAll(filepath.Join(mirrorPath, dir), 0755); err != nil {
-			fmt.Printf("Failed to create mirror directory: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
 	fmt.Printf("Successfully created directory %s\n", dir)
 }
