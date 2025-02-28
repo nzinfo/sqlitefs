@@ -102,6 +102,13 @@ func (fs *SQLiteFS) OpenFile(filename string, flag int, perm fs.FileMode) (billy
 	if f.mode.IsDir() {
 		return nil, fmt.Errorf("cannot open directory: %s", filename)
 	}
+	// 检查缓存
+	if file, ok := fs.openFiles[f.entryID]; ok {
+		// 重置位置, 理论上 应该额外复制一份文件描述符。
+		file.position = 0
+		fmt.Println("open from cache, chunks loading:", filename, len(file.content.chunks))
+		return file, nil
+	}
 
 	// 仅有 fileInfo 不足以打开文件，需要加载文件的 chunks, 这个过程应该是异步的。
 	file, err := OpenFile(fs, f, flag, perm)

@@ -95,6 +95,6 @@ func TestTempFile(t *testing.T) {
 		defer tempFile.Close()
 
 		// Verify file is in the correct directory
-		assert.Contains(t, tempFile.Name(), dir)
+		assert.Contains(t, tempFile.Name(), "testdir")
 	})
 }

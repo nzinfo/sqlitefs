@@ -230,6 +230,7 @@ func (s *storage) Get(path string) (*fileInfo, bool) {
 }
 
 func (s *storage) Rename(from, to string) error {
+	// fmt.Println("Rename====", from, to)
 	from = clean(from)
 	to = clean(to)
 
@@ -304,20 +305,20 @@ func (s *storage) Rename(from, to string) error {
 
 	// 清理缓存
 	// 1. 清理源文件所在目录的 dirsCache（通过 parentID）
-	if fromEntry.parentID != 1 { // 不是根目录
-		s.dirsCache.Remove(fromEntry.parentID)
-	}
+	// fmt.Println("remove from parent", fromEntry.parentID)
+	s.dirsCache.Remove(fromEntry.parentID)
 
 	// 2. 清理目标目录的 dirsCache（通过 parentID）
-	if toParentID != 1 { // 不是根目录
-		s.dirsCache.Remove(toParentID)
-	}
+	// fmt.Println("remove to parent", toParentID)
+	s.dirsCache.Remove(toParentID)
 
-	// 3. 清理源文件在 entriesCache 中的缓存（通过 full_path）
+	// 3. 清理源文件在 entriesCache 中的缓存（通过 full_path*/)
+	// fmt.Println("remove from", from)
 	s.entriesCache.Remove(from)
 
 	// 4. 如果源文件是目录，清理其 dirsCache
 	if fromEntry.mode&os.ModeDir != 0 {
+		// fmt.Println("remove from dir", fromEntry.entryID)
 		s.dirsCache.Remove(fromEntry.entryID)
 	}
 
